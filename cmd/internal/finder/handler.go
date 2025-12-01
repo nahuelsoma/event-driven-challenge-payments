@@ -50,7 +50,7 @@ func (h *Handler) Find(c *gin.Context) {
 
 	payment, err := h.paymentFinder.Find(ctx, filter)
 	if err != nil {
-		if errors.Is(err, ErrPaymentNotFound) {
+		if errors.Is(err, domain.ErrPaymentNotFound) {
 			c.JSON(http.StatusNotFound, gin.H{
 				"message": "payment not found",
 				"error":   "not found",

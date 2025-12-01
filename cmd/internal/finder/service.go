@@ -8,9 +8,6 @@ import (
 	"github.com/nahuelsoma/event-driven-challenge-payments/cmd/internal/shared/domain"
 )
 
-// ErrPaymentNotFound is returned when a payment is not found
-var ErrPaymentNotFound = errors.New("payment not found")
-
 // PaymentReader interface for reading payments and events
 type PaymentReader interface {
 	GetByID(ctx context.Context, paymentID string) (*domain.Payment, error)
@@ -38,10 +35,6 @@ func (pfs *PaymentFinderService) Find(ctx context.Context, filter *PaymentFilter
 	payment, err := pfs.paymentReader.GetByID(ctx, filter.PaymentID)
 	if err != nil {
 		return nil, fmt.Errorf("payment finder: get payment: %w", err)
-	}
-
-	if payment == nil {
-		return nil, ErrPaymentNotFound
 	}
 
 	return payment, nil

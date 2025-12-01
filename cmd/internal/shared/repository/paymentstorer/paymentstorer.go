@@ -1,4 +1,4 @@
-package creator
+package paymentstorer
 
 import (
 	"context"
@@ -12,25 +12,59 @@ import (
 	"github.com/nahuelsoma/event-driven-challenge-payments/cmd/internal/shared/domain"
 )
 
-// paymentStorerDB defines the database operations required by PaymentStorerRepository
-type paymentStorerDB interface {
+// PaymentDB defines the database operations required by PaymentRepository
+type PaymentDB interface {
 	Conn() *sql.DB
 	WithTransaction(ctx context.Context, fn func(tx *sql.Tx) error) error
 }
 
-type PaymentStorerRepository struct {
-	db paymentStorerDB
+// PaymentRepository handles all database operations for payments
+type PaymentRepository struct {
+	db PaymentDB
 }
 
-func NewPaymentStorerRepository(db paymentStorerDB) (*PaymentStorerRepository, error) {
+// NewStorer creates a new PaymentRepository
+func NewStorer(db PaymentDB) (*PaymentRepository, error) {
 	if db == nil {
-		return nil, errors.New("payment storer: database cannot be nil")
+		return nil, errors.New("payment repository: database cannot be nil")
 	}
 
-	return &PaymentStorerRepository{db: db}, nil
+	return &PaymentRepository{db: db}, nil
 }
 
-func (r *PaymentStorerRepository) GetByIDempotencyKey(ctx context.Context, idempotencyKey string) (*domain.Payment, error) {
+// GetByID retrieves a payment by ID
+func (r *PaymentRepository) GetByID(ctx context.Context, paymentID string) (*domain.Payment, error) {
+	query := `
+		SELECT id, idempotency_key, user_id, amount, currency, status, created_at, updated_at
+		FROM payments
+		WHERE id = $1
+	`
+
+	var payment domain.Payment
+	err := r.db.Conn().QueryRowContext(ctx, query, paymentID).Scan(
+		&payment.ID,
+		&payment.IdempotencyKey,
+		&payment.UserID,
+		&payment.Amount,
+		&payment.Currency,
+		&payment.Status,
+		&payment.CreatedAt,
+		&payment.UpdatedAt,
+	)
+
+	if errors.Is(err, sql.ErrNoRows) {
+		return nil, domain.ErrPaymentNotFound
+	}
+
+	if err != nil {
+		return nil, fmt.Errorf("payment repository: get by id: %w", err)
+	}
+
+	return &payment, nil
+}
+
+// GetByIDempotencyKey retrieves a payment by idempotency key
+func (r *PaymentRepository) GetByIDempotencyKey(ctx context.Context, idempotencyKey string) (*domain.Payment, error) {
 	query := `
 		SELECT id, idempotency_key, user_id, amount, currency, status, created_at, updated_at
 		FROM payments
@@ -54,14 +88,14 @@ func (r *PaymentStorerRepository) GetByIDempotencyKey(ctx context.Context, idemp
 	}
 
 	if err != nil {
-		return nil, fmt.Errorf("payment storer: get by idempotency key: %w", err)
+		return nil, fmt.Errorf("payment repository: get by idempotency key: %w", err)
 	}
 
 	return &payment, nil
 }
 
-func (r *PaymentStorerRepository) Save(ctx context.Context, payment *domain.Payment) error {
-	// Build event payload
+// Save saves a new payment with its initial event
+func (r *PaymentRepository) Save(ctx context.Context, payment *domain.Payment) error {
 	payload, err := json.Marshal(map[string]interface{}{
 		"payment_id":      payment.ID,
 		"idempotency_key": payment.IdempotencyKey,
@@ -71,7 +105,7 @@ func (r *PaymentStorerRepository) Save(ctx context.Context, payment *domain.Paym
 		"status":          payment.Status,
 	})
 	if err != nil {
-		return fmt.Errorf("payment storer: marshal payload: %w", err)
+		return fmt.Errorf("payment repository: marshal payload: %w", err)
 	}
 
 	err = r.db.WithTransaction(ctx, func(tx *sql.Tx) error {
@@ -115,20 +149,21 @@ func (r *PaymentStorerRepository) Save(ctx context.Context, payment *domain.Paym
 	})
 
 	if err != nil {
-		return fmt.Errorf("payment storer: save: %w", err)
+		return fmt.Errorf("payment repository: save: %w", err)
 	}
 
 	return nil
 }
 
-func (r *PaymentStorerRepository) UpdateStatus(ctx context.Context, paymentID string, status domain.Status) error {
-	// Build event payload
+// UpdateStatus updates the payment status with optional gateway reference
+func (r *PaymentRepository) UpdateStatus(ctx context.Context, paymentID string, status domain.Status, gatewayRef string) error {
 	payload, err := json.Marshal(map[string]interface{}{
-		"payment_id": paymentID,
-		"status":     status,
+		"payment_id":  paymentID,
+		"status":      status,
+		"gateway_ref": gatewayRef,
 	})
 	if err != nil {
-		return fmt.Errorf("payment storer: marshal payload: %w", err)
+		return fmt.Errorf("payment repository: marshal payload: %w", err)
 	}
 
 	now := time.Now()
@@ -166,10 +201,10 @@ func (r *PaymentStorerRepository) UpdateStatus(ctx context.Context, paymentID st
 		// Update Read Model
 		updateQuery := `
 			UPDATE payments
-			SET status = $1, updated_at = $2
-			WHERE id = $3
+			SET status = $1, gateway_ref = $2, updated_at = $3
+			WHERE id = $4
 		`
-		result, err := tx.ExecContext(ctx, updateQuery, status, now, paymentID)
+		result, err := tx.ExecContext(ctx, updateQuery, status, gatewayRef, now, paymentID)
 		if err != nil {
 			return fmt.Errorf("update status: %w", err)
 		}
@@ -187,8 +222,47 @@ func (r *PaymentStorerRepository) UpdateStatus(ctx context.Context, paymentID st
 	})
 
 	if err != nil {
-		return fmt.Errorf("payment storer: update status: %w", err)
+		return fmt.Errorf("payment repository: update status: %w", err)
 	}
 
 	return nil
+}
+
+// GetEventsByPaymentID retrieves all events for a payment
+func (r *PaymentRepository) GetEventsByPaymentID(ctx context.Context, paymentID string) ([]*domain.Event, error) {
+	query := `
+		SELECT id, payment_id, sequence, event_type, payload, created_at
+		FROM payment_events
+		WHERE payment_id = $1
+		ORDER BY sequence ASC
+	`
+
+	rows, err := r.db.Conn().QueryContext(ctx, query, paymentID)
+	if err != nil {
+		return nil, fmt.Errorf("payment repository: get events by payment id: %w", err)
+	}
+	defer rows.Close()
+
+	events := []*domain.Event{}
+	for rows.Next() {
+		var event domain.Event
+		err := rows.Scan(
+			&event.ID,
+			&event.PaymentID,
+			&event.Sequence,
+			&event.EventType,
+			&event.Payload,
+			&event.CreatedAt,
+		)
+		if err != nil {
+			return nil, fmt.Errorf("payment repository: scan event: %w", err)
+		}
+		events = append(events, &event)
+	}
+
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("payment repository: iterate events: %w", err)
+	}
+
+	return events, nil
 }

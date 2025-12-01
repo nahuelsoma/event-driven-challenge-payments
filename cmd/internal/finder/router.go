@@ -2,9 +2,10 @@ package finder
 
 import (
 	"github.com/gin-gonic/gin"
+	"github.com/nahuelsoma/event-driven-challenge-payments/cmd/internal/shared/repository/paymentstorer"
 )
 
-func Start(rg *gin.RouterGroup, db paymentReaderDB) error {
+func Start(rg *gin.RouterGroup, db paymentstorer.PaymentDB) error {
 	h, err := Build(db)
 	if err != nil {
 		return err
