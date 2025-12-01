@@ -1,3 +1,144 @@
+# Payment Service - Event-Driven Challenge
+
+## Introducción
+
+Este proyecto es la resolución del **Sistema de Pagos Orientado a Eventos** challenge. El objetivo es diseñar e implementar una arquitectura de procesamiento de pagos basada en eventos que maneje pagos, gestión de billetera, y procesamiento asincrónico con manejo de errores.
+
+> **Nota:** El Wallet Service es un servicio externo separado que **no está desarrollado** en este repositorio. Este proyecto (Payment Service) se comunica con el Wallet Service via HTTP para reservar, confirmar y liberar fondos.
+
+---
+
+## Estado de Implementación
+
+### ✅ Implementado
+
+| Componente                      | Descripción                                                    |
+| ------------------------------- | -------------------------------------------------------------- |
+| **Arquitectura Vertical Slice** | Verticales `creator`, `finder`, `processor` con DI encapsulado |
+| **API REST**                    | `POST /api/v1/payments` y `GET /api/v1/payments/:id`           |
+| **Consumer RabbitMQ**           | Competing consumers (3 workers) con ACK/NACK                   |
+| **CQRS + Event Sourcing**       | Event Store (`payment_events`) + Read Model (`payments`)       |
+| **Dual Write Protection**       | Transacción única para Event Store + Read Model                |
+| **Idempotencia API**            | Header `Idempotency-Key` obligatorio                           |
+| **Idempotencia Consumer**       | Skip silencioso si pago ya procesado                           |
+| **Retry con Backoff**           | Exponencial con jitter en capa de infraestructura (DB)         |
+| **Connection Pooling**          | PostgreSQL con 25 conexiones máximas                           |
+| **Saga Choreography**           | Flujo Create → Reserve → Publish → Gateway → Confirm/Release   |
+| **Compensating Transactions**   | Release funds on gateway failure                               |
+| **Structured Logging**          | `slog` con nivel DEBUG                                         |
+
+### ⚠️ Parcialmente Implementado (Stubs/Mocks)
+
+| Componente             | Estado | Descripción                                     |
+| ---------------------- | ------ | ----------------------------------------------- |
+| **Wallet Reserve**     | Mock   | Retorna `nil` sin llamada HTTP real             |
+| **Wallet Confirm**     | Mock   | Retorna `nil` sin llamada HTTP real             |
+| **Wallet Release**     | Mock   | Retorna `nil` sin llamada HTTP real             |
+| **Gateway Processing** | Mock   | Retorna `gw_uuid` simulado                      |
+| **HTTP Client**        | Creado | Cliente creado pero no conectado a repositorios |
+
+> **Nota:** Los repositorios de Wallet (`repository_reserver.go`, `repository_confirmer.go`, `repository_releaser.go`) tienen la estructura correcta pero contienen TODOs. Requieren implementar las llamadas HTTP al Wallet Service externo.
+
+### ❌ No Implementado
+
+| Componente               | Justificación                                        |
+| ------------------------ | ---------------------------------------------------- |
+| **Wallet Service**       | Servicio externo separado (fuera del alcance)        |
+| **Unit Tests**           | Documentado pero no implementado por tiempo          |
+| **Health Checks**        | Endpoints `/health`, `/health/ready`, `/health/live` |
+| **Dead Letter Queue**    | Configuración de DLQ en RabbitMQ                     |
+| **Circuit Breaker**      | Patrón documentado, no implementado                  |
+| **Scheduled Jobs**       | Recovery Job, Expiration Job, DLQ Processor          |
+| **Redis Cache**          | Documentado como mejora de producción                |
+| **OpenTelemetry/Jaeger** | Tracing distribuido                                  |
+| **Business Metrics**     | Counters, Histograms para KPIs                       |
+
+---
+
+## Documentación Detallada
+
+Este README contiene documentación exhaustiva de:
+
+1. **Diseño de Componentes** - Arquitectura y patrones
+2. **Flujos de Pago** - Happy path, errores, timeouts
+3. **Base de Datos** - CQRS + Event Sourcing
+4. **Manejo de Errores** - Retry, DLQ, compensaciones
+5. **Circuit Breaker** - Diseño (no implementado)
+6. **Recuperación** - Scheduled Jobs (no implementado)
+7. **Concurrencia** - Idempotencia y race conditions
+8. **Observabilidad** - OpenTelemetry (no implementado)
+9. **Escalabilidad** - Estrategias de crecimiento
+
+---
+
+## Probar la API
+
+El servicio está desplegado en **Railway** con PostgreSQL y RabbitMQ.
+
+**Base URL:** `https://payments-api.up.railway.app`
+
+### Crear Pago
+
+```bash
+curl --request POST \
+  --url https://payments-api.up.railway.app/api/v1/payments \
+  --header 'Content-Type: application/json' \
+  --header 'Idempotency-Key: unique-key-123' \
+  --data '{
+    "user_id": "user-001",
+    "amount": 150.00,
+    "currency": "ARS"
+  }'
+```
+
+**Respuesta exitosa (201):**
+
+```json
+{
+  "message": "payment created successfully",
+  "data": {
+    "id": "6365af45-e532-43e4-bfee-1100c33229f3",
+    "idempotency_key": "unique-key-123",
+    "user_id": "user-001",
+    "amount": 150.0,
+    "currency": "ARS",
+    "status": "reserved",
+    "created_at": "2024-01-15T10:30:00Z",
+    "updated_at": "2024-01-15T10:30:00Z"
+  }
+}
+```
+
+### Consultar Pago
+
+```bash
+curl --request GET \
+  --url https://payments-api.up.railway.app/api/v1/payments/{payment_id}
+```
+
+**Ejemplo:**
+
+```bash
+curl --request GET \
+  --url https://payments-api.up.railway.app/api/v1/payments/6365af45-e532-43e4-bfee-1100c33229f3
+```
+
+### Consultar Eventos de un Pago
+
+```bash
+curl --request GET \
+  --url https://payments-api.up.railway.app/api/v1/payments/{payment_id}/events
+```
+
+**Ejemplo:**
+
+```bash
+curl --request GET \
+  --url https://payments-api.up.railway.app/api/v1/payments/6365af45-e532-43e4-bfee-1100c33229f3/events
+```
+
+---
+
 ## Diseño de Componentes
 
 ### Wallet Client (shared)
@@ -85,23 +226,23 @@ func Start(rg *gin.RouterGroup, db, httpClient, rabbitConn interface{}) error {
 Client          Payment API         Wallet API          Consumer         Gateway (ext)
   │                  │                   │                   │                  │
   │ POST /payments   │                   │                   │                  │
-  │─────────────────▶│                   │                   │                  │
+  │─────────────────>│                   │                   │                  │
   │                  │ POST /reserve     │                   │                  │
-  │                  │──────────────────▶│                   │                  │
-  │                  │◀──────────────────│ 200 OK            │                  │
+  │                  │──────────────────>│                   │                  │
+  │                  │<──────────────────│ 200 OK            │                  │
   │                  │                   │                   │                  │
   │                  │ Publish event     │                   │                  │
-  │                  │─────────────────────────────────────▶│                  │
-  │◀─────────────────│ 201 {reserved}    │                   │                  │
+  │                  │──────────────────────────────────────>│                  │
+  │<─────────────────│ 201 {reserved}    │                   │                  │
   │                  │                   │                   │                  │
   │                  │                   │                   │ Process payment  │
-  │                  │                   │                   │─────────────────▶│
-  │                  │                   │                   │◀─────────────────│
+  │                  │                   │                   │─────────────────>│
+  │                  │                   │                   │<─────────────────│
   │                  │                   │                   │ 200 {gateway_ref}│
   │                  │                   │                   │                  │
   │                  │                   │ POST /confirm     │                  │
-  │                  │                   │◀──────────────────│                  │
-  │                  │                   │──────────────────▶│ 200 OK           │
+  │                  │                   │<──────────────────│                  │
+  │                  │                   │──────────────────>│ 200 OK           │
   │                  │                   │                   │                  │
   │                  │                   │                   │ Update DB        │
   │                  │                   │                   │ (completed,      │
@@ -114,12 +255,12 @@ Client          Payment API         Wallet API          Consumer         Gateway
 Client          Payment API         Wallet API          Consumer         Gateway (ext)
   │                  │                   │                   │                  │
   │ POST /payments   │                   │                   │                  │
-  │─────────────────▶│                   │                   │                  │
+  │─────────────────>│                   │                   │                  │
   │                  │ POST /reserve     │                   │                  │
-  │                  │──────────────────▶│                   │                  │
-  │                  │◀──────────────────│                   │                  │
+  │                  │──────────────────>│                   │                  │
+  │                  │<──────────────────│                   │                  │
   │                  │ 400 insufficient  │                   │                  │
-  │◀─────────────────│                   │                   │                  │
+  │<─────────────────│                   │                   │                  │
   │ 400 {error}      │                   │                   │                  │
 ```
 
@@ -129,18 +270,18 @@ Client          Payment API         Wallet API          Consumer         Gateway
 Client          Payment API         Wallet API          Consumer         Gateway (ext)
   │                  │                   │                   │                  │
   │                  │                   │                   │ Process message  │
-  │                  │                   │                   │─────────────────▶│
-  │                  │                   │                   │◀─────────────────│
+  │                  │                   │                   │─────────────────>│
+  │                  │                   │                   │<─────────────────│
   │                  │                   │                   │     Timeout      │
   │                  │                   │                   │                  │
   │                  │                   │                   │ Retry (max 3)    │
-  │                  │                   │                   │─────────────────▶│
-  │                  │                   │                   │◀─────────────────│
+  │                  │                   │                   │─────────────────>│
+  │                  │                   │                   │<─────────────────│
   │                  │                   │                   │     Timeout      │
   │                  │                   │                   │                  │
   │                  │                   │ POST /release     │                  │
-  │                  │                   │◀──────────────────│                  │
-  │                  │                   │──────────────────▶│ 200 OK           │
+  │                  │                   │<──────────────────│                  │
+  │                  │                   │──────────────────>│ 200 OK           │
   │                  │                   │                   │                  │
   │                  │                   │                   │ Update DB        │
   │                  │                   │                   │ (failed)         │
@@ -156,7 +297,7 @@ Client          Payment API         Wallet API          Consumer         Gateway
 ┌─────────────────────────────────────────────────────────────┐
 │                      User Wallet                            │
 │                                                             │
-│  Available: $150     Reserved: $50     Total: $200         │
+│  Available: $150     Reserved: $50     Total: $200          │
 └─────────────────────────────────────────────────────────────┘
 
 Operaciones:
@@ -219,8 +360,8 @@ Operaciones:
 │  4. Consumer envía ACK                                          │
 │  5. RabbitMQ elimina mensaje                                    │
 │                                                                 │
-│  Si falla antes del ACK → RabbitMQ reentrega (duplicado)       │
-│  Consumer detecta duplicado → Skip (idempotencia)              │
+│  Si falla antes del ACK → RabbitMQ reentrega (duplicado)        │
+│  Consumer detecta duplicado → Skip (idempotencia)               │
 └─────────────────────────────────────────────────────────────────┘
 ```
 
@@ -288,7 +429,7 @@ Existen dos formas de coordinar una Saga:
 
 ```
 ┌─────────────────┐  PaymentCreated   ┌─────────────────┐
-│  Payment API    │ ────────────────▶ │    Consumer     │
+│  Payment API    │ ────────────────> │    Consumer     │
 │  (crea pago,    │                   │  (escucha,      │
 │   reserva)      │                   │   procesa)      │
 └─────────────────┘                   └────────┬────────┘
@@ -345,10 +486,10 @@ Cada servicio usa **PostgreSQL** con dos modelos de datos:
 │   COMMAND (Write)                          QUERY (Read)                 │
 │        │                                        │                       │
 │        ▼                                        ▼                       │
-│   ┌─────────────────┐  sync (tx)   ┌─────────────────┐                 │
-│   │  Event Store    │ ───────────▶ │   Read Model    │                 │
-│   │  (INSERT only)  │              │   (SELECT)      │                 │
-│   └─────────────────┘              └─────────────────┘                 │
+│   ┌─────────────────┐  sync (tx)   ┌─────────────────┐                  │
+│   │  Event Store    │ ───────────> │   Read Model    │                  │
+│   │  (INSERT only)  │              │   (SELECT)      │                  │
+│   └─────────────────┘              └─────────────────┘                  │
 │                                                                         │
 │   Fuente de verdad                 Optimizado para                      │
 │   (inmutable)                      lecturas                             │
@@ -609,7 +750,7 @@ El retry se implementa en la capa de infraestructura (no en services) para que s
 
 ```
 ┌─────────────────────────────────────────────────────────────────┐
-│   Handler ──▶ Service ──▶ Repository ──▶ Infrastructure        │
+│   Handler ──> Service ──> Repository ──> Infrastructure         │
 │                                              │                  │
 │                                              ▼                  │
 │                                    ┌─────────────────┐          │
@@ -756,14 +897,14 @@ Un **Circuit Breaker** funciona como un interruptor eléctrico: si detecta que u
 ```
 Sin Circuit Breaker:
 ┌─────────────────────────────────────────────────────────────────┐
-│  Request 1 → Timeout (5s) → Request 2 → Timeout (5s) → ...     │
-│  Tu servicio se queda esperando → Threads bloqueados → Colapso │
+│  Request 1 → Timeout (5s) → Request 2 → Timeout (5s) → ...      │
+│  Tu servicio se queda esperando → Threads bloqueados → Colapso  │
 └─────────────────────────────────────────────────────────────────┘
 
 Con Circuit Breaker:
 ┌─────────────────────────────────────────────────────────────────┐
-│  5 errores consecutivos → Circuit ABRE → Fallo inmediato (ms)  │
-│  Tu servicio responde rápido → Recursos liberados → Estable    │
+│  5 errores consecutivos → Circuit ABRE → Fallo inmediato (ms)   │
+│  Tu servicio responde rápido → Recursos liberados → Estable     │
 └─────────────────────────────────────────────────────────────────┘
 ```
 
@@ -772,19 +913,19 @@ Con Circuit Breaker:
 ```
 ┌──────────────────────────────────────────────────────────────────────────┐
 │                                                                          │
-│   ┌──────────┐       5 errores consecutivos      ┌──────────┐           │
-│   │  CLOSED  │ ─────────────────────────────────▶│   OPEN   │           │
+│   ┌──────────┐       5 errores consecutivos      ┌──────────┐            │
+│   │  CLOSED  │ ─────────────────────────────────>│   OPEN   │            │
 │   │ (Normal) │                                   │(Bloqueado)│           │
 │   └────┬─────┘                                   └─────┬─────┘           │
 │        │                                               │                 │
-│        │ ◀─────────── Éxito ──────────┐          30 segundos            │
+│        │ <─────────── Éxito ──────────┐          30 segundos             │
 │        │                              │               │                  │
-│        │                       ┌──────┴─────┐        │                  │
-│        │                       │ HALF-OPEN  │◀───────┘                  │
-│        │                       │ (Probando) │                           │
-│        │                       └──────┬─────┘                           │
+│        │                       ┌──────┴─────┐        │                   │
+│        │                       │ HALF-OPEN  │<───────┘                   │
+│        │                       │ (Probando) │                            │
+│        │                       └──────┬─────┘                            │
 │        │                              │                                  │
-│        │                         Si falla → Vuelve a OPEN               │
+│        │                         Si falla → Vuelve a OPEN                │
 │                                                                          │
 └──────────────────────────────────────────────────────────────────────────┘
 ```
@@ -814,12 +955,12 @@ Cuando el cliente intenta crear un pago:
 Cliente                Payment API              Circuit Breaker           Wallet Service
    │                       │                          │                        │
    │ POST /payments        │                          │                        │
-   │──────────────────────▶│                          │                        │
+   │──────────────────────>│                          │                        │
    │                       │ Reserve()                │                        │
-   │                       │─────────────────────────▶│ ← OPEN                 │
-   │                       │◀─────────────────────────│                        │
+   │                       │─────────────────────────>│ ← OPEN                 │
+   │                       │<─────────────────────────│                        │
    │                       │ Error: "circuit open"    │                        │
-   │◀──────────────────────│                          │                        │
+   │<──────────────────────│                          │                        │
    │ 503 Service Unavailable                          │                        │
 ```
 
@@ -912,10 +1053,10 @@ Cuando el consumer intenta procesar el pago con el gateway externo:
 RabbitMQ                 Consumer              Circuit Breaker             Gateway
    │                        │                        │                        │
    │ Deliver message        │                        │                        │
-   │───────────────────────▶│                        │                        │
+   │───────────────────────>│                        │                        │
    │                        │ gateway.Process()      │                        │
-   │                        │───────────────────────▶│ ← OPEN                 │
-   │                        │◀───────────────────────│                        │
+   │                        │───────────────────────>│ ← OPEN                 │
+   │                        │<───────────────────────│                        │
    │                        │ Error: "circuit open"  │                        │
    │                        │                        │                        │
    │      ¿QUÉ HACEMOS?     │                        │                        │
@@ -951,7 +1092,7 @@ RabbitMQ                 Consumer              Circuit Breaker             Gatew
 │  status=completed status=failed     │                                       │
 │       │           │                 │                                       │
 │       ▼           ▼                 │                                       │
-│    ACK ✅      ACK ✅               │                                       │
+│    ACK ✅      ACK ✅              │                                       │
 └─────────────────────────────────────────────────────────────────────────────┘
 ```
 
@@ -1018,14 +1159,14 @@ Cuando el Gateway aceptó el pago pero no podemos confirmar en Wallet:
 Estados del pago (con Circuit Breaker):
 
 ┌─────────┐    ┌──────────┐    ┌─────────────────┐    ┌───────────┐
-│ pending │───▶│ reserved │───▶│ pending_confirm │───▶│ completed │
+│ pending │───>│ reserved │───>│ pending_confirm │───>│ completed │
 └─────────┘    └──────────┘    └─────────────────┘    └───────────┘
                                        │
                                        │ Recovery Job
                                        │ retoma cuando Wallet
                                        │ esté disponible
                                        │
-                                       └──────▶ completed
+                                       └──────> completed
 ```
 
 ### Configuración Típica
@@ -1073,12 +1214,12 @@ Cuando el sistema se reinicia o un consumer crashea, pueden quedar pagos en esta
 Los jobs solo **detectan** pagos huérfanos y los publican en colas de recovery. Consumers dedicados **resuelven** los casos 1 a 1. Este enfoque mantiene consistencia arquitectónica (todo es event-driven), escala horizontalmente con N consumers, y es resiliente a fallas (si un consumer falla, el mensaje vuelve a la cola).
 
 ```
-┌─────────────────┐     ┌─────────────────┐     ┌─────────────────┐
-│  Recovery Job   │────▶│   PostgreSQL    │     │ Recovery Queue  │
+┌─────────────────┐     ┌─────────────────┐     ┌──────────────────┐
+│  Recovery Job   │────>│   PostgreSQL    │     │ Recovery Queue   │
 │  (cada 5 min)   │     │  (busca stuck)  │     │ payments.recovery│
-└─────────────────┘     └─────────────────┘     └────────┬────────┘
+└─────────────────┘     └─────────────────┘     └────────┬─────────┘
         │                                                 │
-        └── Publica en cola ─────────────────────────────▶│
+        └── Publica en cola ─────────────────────────────>│
                                                           │
                                                ┌──────────▼──────────┐
                                                │  Recovery Consumer  │
@@ -1092,32 +1233,32 @@ Los jobs solo **detectan** pagos huérfanos y los publican en colas de recovery.
 
 ```
 ┌─────────────────────────────────────────────────────────────────────────────┐
-│                         Scheduled Jobs + Recovery Queues                     │
-│                                                                              │
+│                         Scheduled Jobs + Recovery Queues                    │
+│                                                                             │
 │  JOBS (solo detectan y publican)                                            │
-│  ┌─────────────────┐  ┌─────────────────┐  ┌─────────────────┐             │
-│  │  Recovery Job   │  │  Expiration Job │  │   DLQ Processor │             │
-│  │  (cada 5 min)   │  │  (cada 1 min)   │  │  (cada 10 min)  │             │
-│  └────────┬────────┘  └────────┬────────┘  └────────┬────────┘             │
+│  ┌─────────────────┐  ┌─────────────────┐  ┌─────────────────┐              │
+│  │  Recovery Job   │  │  Expiration Job │  │   DLQ Processor │              │
+│  │  (cada 5 min)   │  │  (cada 1 min)   │  │  (cada 10 min)  │              │
+│  └────────┬────────┘  └────────┬────────┘  └────────┬────────┘              │
 │           │                    │                    │                       │
 │           ▼                    ▼                    ▼                       │
-│  ┌─────────────────────────────────────────────────────────────┐           │
+│  ┌─────────────────────────────────────────────────────────────┐            │
 │  │                       PostgreSQL                             │           │
 │  │   SELECT * FROM payments WHERE status = 'reserved'           │           │
 │  │   AND updated_at < NOW() - INTERVAL '10 minutes'             │           │
-│  └─────────────────────────────────────────────────────────────┘           │
+│  └─────────────────────────────────────────────────────────────┘            │
 │           │                    │                    │                       │
 │           ▼                    ▼                    ▼                       │
 │  COLAS (procesan 1 a 1)                                                     │
-│  ┌─────────────────┐  ┌─────────────────┐  ┌─────────────────┐             │
-│  │ payments.recovery│ │ payments.expire │  │ payments.dlq    │             │
-│  │ (N consumers)   │  │ (N consumers)   │  │ .reprocess      │             │
-│  └────────┬────────┘  └────────┬────────┘  └────────┬────────┘             │
+│  ┌─────────────────┐  ┌─────────────────┐  ┌─────────────────┐              │
+│  │ payments.recovery│ │ payments.expire │  │ payments.dlq    │              │
+│  │ (N consumers)   │  │ (N consumers)   │  │ .reprocess      │              │
+│  └────────┬────────┘  └────────┬────────┘  └────────┬────────┘              │
 │           │                    │                    │                       │
 │           ▼                    ▼                    ▼                       │
 │  CONSUMERS (resuelven)                                                      │
-│  - Re-procesar pago    - Liberar fondos      - Retry, Fail,                │
-│  - O marcar failed     - Marcar expired        o Alertar                   │
+│  - Re-procesar pago    - Liberar fondos      - Retry, Fail,                 │
+│  - O marcar failed     - Marcar expired        o Alertar                    │
 └─────────────────────────────────────────────────────────────────────────────┘
 ```
 
@@ -1196,7 +1337,7 @@ LIMIT 100;
 
 ```
 ┌─────────┐    reserve    ┌──────────┐    gateway OK    ┌───────────┐
-│ pending │──────────────▶│ reserved │─────────────────▶│ completed │
+│ pending │──────────────>│ reserved │─────────────────>│ completed │
 └─────────┘               └──────────┘                  └───────────┘
                                │
               ┌────────────────┼────────────────┐
@@ -1207,7 +1348,7 @@ LIMIT 100;
          │ (TTL)   │     │ (error) │      │         │
          └─────────┘     └─────────┘      └────┬────┘
                                                │
-                                               └──▶ reserved (re-procesado)
+                                               └──> reserved (re-procesado)
 ```
 
 ### Configuración de Schedules
@@ -1883,15 +2024,15 @@ Para producción crítica, RabbitMQ soporta clustering con replicación de colas
 ┌─────────────────────────────────────────────────────────┐
 │                   RabbitMQ Cluster                      │
 │                                                         │
-│  ┌─────────────┐  ┌─────────────┐  ┌─────────────┐    │
-│  │   Node 1    │  │   Node 2    │  │   Node 3    │    │
-│  │  (Primary)  │◀─│  (Mirror)   │◀─│  (Mirror)   │    │
-│  │             │─▶│             │─▶│             │    │
-│  └─────────────┘  └─────────────┘  └─────────────┘    │
+│  ┌─────────────┐  ┌─────────────┐  ┌─────────────┐      │
+│  │   Node 1    │  │   Node 2    │  │   Node 3    │      │
+│  │  (Primary)  │<─│  (Mirror)   │<─│  (Mirror)   │      │
+│  │             │─>│             │─>│             │      │
+│  └─────────────┘  └─────────────┘  └─────────────┘      │
 │                                                         │
-│  - Colas replicadas en todos los nodos                 │
-│  - Si Node 1 cae, Node 2 asume como primary            │
-│  - Clientes se reconectan automáticamente              │
+│  - Colas replicadas en todos los nodos                  │
+│  - Si Node 1 cae, Node 2 asume como primary             │
+│  - Clientes se reconectan automáticamente               │
 └─────────────────────────────────────────────────────────┘
 ```
 
@@ -1925,157 +2066,3 @@ CREATE TABLE payment_events_y2024m01
 | Memoria       | > 80%          | Agregar instancia |
 | Cola RabbitMQ | > 10K mensajes | Agregar consumer  |
 | Latencia P99  | > 500ms        | Investigar        |
-
----
-
-## Testing (Testify + Table-Driven Tests)
-
-### Enfoque Principal
-
-El sistema utiliza **Table-Driven Tests con Error Cases** como patrón estándar. Este enfoque proporciona:
-
-- **Cobertura completa** en una sola función de test
-- **Documentación del comportamiento** a través de nombres descriptivos
-- **Fácil mantenimiento** y extensión de casos
-
-### Patrón AAA (Arrange-Act-Assert)
-
-Todas las pruebas siguen el patrón AAA para estructura clara:
-
-```
-┌─────────────────────────────────────────────────────────────────┐
-│  1. ARRANGE  - Preparar datos, mocks y dependencias            │
-│  2. ACT      - Ejecutar la operación bajo prueba               │
-│  3. ASSERT   - Verificar resultados y comportamiento esperado  │
-└─────────────────────────────────────────────────────────────────┘
-```
-
-### Convenciones de Nomenclatura
-
-**Archivos:**
-
-- Tests: `*_test.go` (mismo paquete que el código)
-- Mocks: `*_mock.go` (archivos dedicados)
-
-**Nombres BDD (Behavior-Driven Development):**
-
-```
-"when [condición] it should [comportamiento esperado] and [estado del error]"
-```
-
-Ejemplos:
-
-- `"when user provides valid data it should create user successfully and no error"`
-- `"when email already exists it should return validation error"`
-
-### Estructura del Test
-
-| Elemento           | Descripción                          |
-| ------------------ | ------------------------------------ |
-| `tests []struct{}` | Slice de casos de prueba             |
-| `name`             | Descripción BDD del escenario        |
-| `input`            | Datos de entrada                     |
-| `expectedResult`   | Resultado esperado                   |
-| `expectedError`    | Error esperado (nil si no hay error) |
-| `t.Run()`          | Ejecuta cada caso como subtest       |
-
-### Ejemplo: Service con Mock
-
-```go
-// wallet_client_mock.go
-type MockWalletClient struct {
-    mock.Mock
-}
-
-func (m *MockWalletClient) Reserve(ctx context.Context, userID string, amount float64) error {
-    args := m.Called(ctx, userID, amount)
-    return args.Error(0)
-}
-
-// payment_service_test.go
-func TestPaymentService_Create(t *testing.T) {
-    tests := []struct {
-        name           string
-        userID         string
-        amount         float64
-        shouldCallMock bool
-        mockResponse   error
-        expectedError  error
-    }{
-        {
-            name:           "when valid payment data it should create payment and no error",
-            userID:         "user-123",
-            amount:         100.0,
-            shouldCallMock: true,
-            mockResponse:   nil,
-            expectedError:  nil,
-        },
-        {
-            name:           "when wallet reserve fails it should return error",
-            userID:         "user-123",
-            amount:         100.0,
-            shouldCallMock: true,
-            mockResponse:   errors.New("insufficient funds"),
-            expectedError:  errors.New("insufficient funds"),
-        },
-        {
-            name:           "when amount is zero it should return validation error",
-            userID:         "user-123",
-            amount:         0,
-            shouldCallMock: false,  // Validación falla antes de llamar al mock
-            expectedError:  errors.New("amount must be positive"),
-        },
-    }
-
-    for _, tt := range tests {
-        t.Run(tt.name, func(t *testing.T) {
-            // Arrange
-            mockWallet := new(MockWalletClient)
-            if tt.shouldCallMock {
-                mockWallet.On("Reserve", mock.Anything, tt.userID, tt.amount).Return(tt.mockResponse)
-            }
-            service := NewPaymentService(mockWallet)
-
-            // Act
-            _, err := service.Create(context.Background(), tt.userID, tt.amount)
-
-            // Assert
-            if tt.expectedError != nil {
-                assert.Error(t, err)
-                assert.Equal(t, tt.expectedError.Error(), err.Error())
-            } else {
-                assert.NoError(t, err)
-            }
-
-            mockWallet.AssertExpectations(t)
-        })
-    }
-}
-```
-
-### Resumen de Principios
-
-| Principio        | Descripción                           |
-| ---------------- | ------------------------------------- |
-| **Table-Driven** | Múltiples escenarios en una función   |
-| **Error Cases**  | Probar explícitamente casos de error  |
-| **AAA Pattern**  | Arrange → Act → Assert                |
-| **BDD Names**    | Nombres que documentan comportamiento |
-| **Mock Files**   | Archivos `_mock.go` separados         |
-| **Idempotencia** | Tests independientes entre sí         |
-
-### Ejecución
-
-```bash
-# Ejecutar todos los tests
-go test ./...
-
-# Con cobertura
-go test -cover ./...
-
-# Generar reporte HTML
-go test -coverprofile=coverage.out ./...
-go tool cover -html=coverage.out -o coverage.html
-```
-
-> **Referencia completa:** Ver las reglas de testing de cursor para más detalles.
