@@ -4,6 +4,7 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
+- Unify common repositories ([#10](https://github.com/nahuelsoma/event-driven-challenge-payments/pull/10))
 - Add Readme ([#9](https://github.com/nahuelsoma/event-driven-challenge-payments/pull/9))
 - Add events reader endpoint ([#8](https://github.com/nahuelsoma/event-driven-challenge-payments/pull/8))
 - Enhance error wrapping and logging ([#7](https://github.com/nahuelsoma/event-driven-challenge-payments/pull/7))
