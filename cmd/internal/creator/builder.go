@@ -1,17 +1,21 @@
 package creator
 
 import (
-	"github.com/nahuelsoma/event-driven-challenge-payments/cmd/internal/shared/paymentstorer"
+	"net/http"
+
+	"github.com/nahuelsoma/event-driven-challenge-payments/cmd/internal/shared/repository/paymentstorer"
+	"github.com/nahuelsoma/event-driven-challenge-payments/cmd/internal/shared/repository/walletclient"
 	"github.com/nahuelsoma/event-driven-challenge-payments/infrastructure/messagebroker"
 )
 
-func Build(db paymentstorer.PaymentDB, c interface{}, mbc *messagebroker.Connection, exchange, queueName string) (*Handler, error) {
+// Build creates a new Handler with all dependencies wired up
+func Build(db paymentstorer.PaymentDB, rc *http.Client, mbc *messagebroker.Connection, exchange, queueName string) (*Handler, error) {
 	ps, err := paymentstorer.NewStorer(db)
 	if err != nil {
 		return nil, err
 	}
 
-	wr, err := NewWalletReserverRepository(c)
+	wc, err := walletclient.NewWalletClient(rc)
 	if err != nil {
 		return nil, err
 	}
@@ -32,7 +36,7 @@ func Build(db paymentstorer.PaymentDB, c interface{}, mbc *messagebroker.Connect
 		return nil, err
 	}
 
-	pc, err := NewPaymentCreatorService(ps, wr, pp)
+	pc, err := NewPaymentCreatorService(ps, wc, pp)
 	if err != nil {
 		return nil, err
 	}

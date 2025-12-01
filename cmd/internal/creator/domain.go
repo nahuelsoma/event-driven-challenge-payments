@@ -8,6 +8,11 @@ import (
 	"github.com/nahuelsoma/event-driven-challenge-payments/cmd/internal/shared/domain"
 )
 
+// Errors
+var (
+	ErrNilWalletClient = errors.New("wallet client cannot be nil")
+)
+
 // PaymentRequest represents a request to create a payment
 type PaymentRequest struct {
 	UserID   string          `json:"user_id"`  // User ID of the payment (in a real application, this would be the user ID from the authenticated user)
