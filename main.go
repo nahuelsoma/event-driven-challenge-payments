@@ -9,7 +9,7 @@ import (
 	"github.com/nahuelsoma/event-driven-challenge-payments/config"
 	"github.com/nahuelsoma/event-driven-challenge-payments/infrastructure/database"
 	"github.com/nahuelsoma/event-driven-challenge-payments/infrastructure/http"
-	messagebroker "github.com/nahuelsoma/event-driven-challenge-payments/infrastructure/message_broker"
+	"github.com/nahuelsoma/event-driven-challenge-payments/infrastructure/messagebroker"
 )
 
 func main() {
