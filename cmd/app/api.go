@@ -10,10 +10,11 @@ import (
 	"github.com/nahuelsoma/event-driven-challenge-payments/cmd/internal/creator"
 	"github.com/nahuelsoma/event-driven-challenge-payments/cmd/internal/finder"
 	"github.com/nahuelsoma/event-driven-challenge-payments/infrastructure/database"
+	"github.com/nahuelsoma/event-driven-challenge-payments/infrastructure/messagebroker"
 )
 
 // StartAPI initializes and starts the HTTP API server
-func StartAPI(database *database.DB, httpClient interface{}, messageBroker interface{}) error {
+func StartAPI(database *database.DB, httpClient interface{}, messageBroker *messagebroker.Connection) error {
 	r := gin.New()
 
 	apiV1 := r.Group("/api/v1")
