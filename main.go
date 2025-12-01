@@ -25,14 +25,7 @@ func main() {
 	}
 
 	// Create database connection
-	dbConn, err := database.NewPostgresConnection(&database.Config{
-		Host:     cfg.Database.Host,
-		Port:     cfg.Database.Port,
-		User:     cfg.Database.User,
-		Password: cfg.Database.Password,
-		DBName:   cfg.Database.DBName,
-		SSLMode:  cfg.Database.SSLMode,
-	})
+	dbConn, err := database.NewPostgresConnection(cfg.Database.URL())
 	if err != nil {
 		log.Fatalf("api: failed to create database connection: %v", err)
 	}
@@ -50,15 +43,7 @@ func main() {
 	}
 
 	// Create RabbitMQ connection
-	messageBrokerConfig := map[string]string{
-		"host":     "localhost",
-		"port":     "5672",
-		"user":     "guest",
-		"password": "guest",
-		"vhost":    "/",
-	}
-
-	messageBrokerConn, err := messagebroker.NewMessageBrokerConnection(messageBrokerConfig)
+	messageBrokerConn, err := messagebroker.Connect(cfg.MessageBroker.URL())
 	if err != nil {
 		log.Fatalf("api: failed to create RabbitMQ connection: %v", err)
 	}
