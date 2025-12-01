@@ -6,6 +6,7 @@ import (
 	"os"
 
 	"github.com/nahuelsoma/event-driven-challenge-payments/cmd/app"
+	"github.com/nahuelsoma/event-driven-challenge-payments/config"
 	"github.com/nahuelsoma/event-driven-challenge-payments/infrastructure/database"
 	"github.com/nahuelsoma/event-driven-challenge-payments/infrastructure/http"
 	messagebroker "github.com/nahuelsoma/event-driven-challenge-payments/infrastructure/message_broker"
@@ -17,19 +18,25 @@ func main() {
 		Level: slog.LevelDebug,
 	})))
 
-	// Create database connection
-	dbConfig := map[string]string{
-		"host":     "localhost",
-		"port":     "5432",
-		"user":     "postgres",
-		"password": "postgres",
-		"dbname":   "payments",
+	// Load configuration from environment variables
+	cfg, err := config.Load()
+	if err != nil {
+		log.Fatalf("config: %v", err)
 	}
 
-	dbConn, err := database.NewSQLDatabase(dbConfig)
+	// Create database connection
+	dbConn, err := database.NewPostgresConnection(&database.Config{
+		Host:     cfg.Database.Host,
+		Port:     cfg.Database.Port,
+		User:     cfg.Database.User,
+		Password: cfg.Database.Password,
+		DBName:   cfg.Database.DBName,
+		SSLMode:  cfg.Database.SSLMode,
+	})
 	if err != nil {
 		log.Fatalf("api: failed to create database connection: %v", err)
 	}
+	defer dbConn.Close()
 
 	// Create HTTP client
 	httpConfig := map[string]string{
