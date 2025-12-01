@@ -2,30 +2,11 @@ package creator
 
 import (
 	"github.com/gin-gonic/gin"
+	"github.com/nahuelsoma/event-driven-challenge-payments/infrastructure/messagebroker"
 )
 
-func Start(rg *gin.RouterGroup, databaseConn paymentStorerDB, client interface{}, messageQueueConn interface{}) error {
-	ps, err := NewPaymentStorerRepository(databaseConn)
-	if err != nil {
-		return err
-	}
-
-	wr, err := NewWalletReserverRepository(client)
-	if err != nil {
-		return err
-	}
-
-	pp, err := NewPaymentPublisherRepository(messageQueueConn)
-	if err != nil {
-		return err
-	}
-
-	pc, err := NewPaymentCreatorService(ps, wr, pp)
-	if err != nil {
-		return err
-	}
-
-	h, err := NewHandler(pc)
+func Start(rg *gin.RouterGroup, dc paymentStorerDB, c interface{}, mbc *messagebroker.Connection) error {
+	h, err := Build(dc, c, mbc)
 	if err != nil {
 		return err
 	}
