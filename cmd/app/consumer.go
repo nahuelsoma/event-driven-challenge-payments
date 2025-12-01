@@ -10,14 +10,12 @@ import (
 )
 
 const (
-	queueName = "payments"
-	workers   = 3
+	workers = 3
 )
 
 // StartConsumer initializes and starts the message consumer
 // Returns after setup is complete. Message consumption runs in background goroutines.
-func StartConsumer(db *database.DB, conn *messagebroker.Connection, walletClient interface{}, gatewayClient interface{}) error {
-
+func StartConsumer(db *database.DB, conn *messagebroker.Connection, walletClient interface{}, queueName string) error {
 	// Create channel for consumer
 	channel, err := conn.NewChannel()
 	if err != nil {
@@ -37,7 +35,7 @@ func StartConsumer(db *database.DB, conn *messagebroker.Connection, walletClient
 	}
 
 	// Create payment processor handler using the vertical pattern
-	handler, err := processor.Build(db, walletClient, gatewayClient)
+	handler, err := processor.Build(db, walletClient)
 	if err != nil {
 		return fmt.Errorf("consumer: failed to create processor: %w", err)
 	}
