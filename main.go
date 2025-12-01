@@ -49,11 +49,13 @@ func main() {
 	}
 	defer messageBrokerConn.Close()
 
-	if err := app.StartAPI(dbConn, walletClient, messageBrokerConn, cfg.QueueName); err != nil {
-		log.Fatalf("main: failed to start API: %v", err)
-	}
-
+	// Start consumer first (runs in background goroutines)
 	if err := app.StartConsumer(dbConn, messageBrokerConn, walletClient, cfg.QueueName); err != nil {
 		log.Fatalf("main: failed to start consumer: %v", err)
+	}
+
+	// Start API server (blocks to keep the application running)
+	if err := app.StartAPI(dbConn, walletClient, messageBrokerConn, cfg.QueueName); err != nil {
+		log.Fatalf("main: failed to start API: %v", err)
 	}
 }
