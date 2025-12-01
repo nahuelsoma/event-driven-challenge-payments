@@ -2,7 +2,7 @@ package finder
 
 import (
 	"github.com/gin-gonic/gin"
-	"github.com/nahuelsoma/event-driven-challenge-payments/cmd/internal/shared/paymentstorer"
+	"github.com/nahuelsoma/event-driven-challenge-payments/cmd/internal/shared/repository/paymentstorer"
 )
 
 func Start(rg *gin.RouterGroup, db paymentstorer.PaymentDB) error {

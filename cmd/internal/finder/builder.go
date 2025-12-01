@@ -1,7 +1,7 @@
 package finder
 
 import (
-	"github.com/nahuelsoma/event-driven-challenge-payments/cmd/internal/shared/paymentstorer"
+	"github.com/nahuelsoma/event-driven-challenge-payments/cmd/internal/shared/repository/paymentstorer"
 )
 
 func Build(db paymentstorer.PaymentDB) (*Handler, error) {
