@@ -4,7 +4,7 @@ import (
 	"github.com/gin-gonic/gin"
 )
 
-func Start(rg *gin.RouterGroup, databaseConn interface{}, client interface{}, messageQueueConn interface{}) error {
+func Start(rg *gin.RouterGroup, databaseConn paymentStorerDB, client interface{}, messageQueueConn interface{}) error {
 	ps, err := NewPaymentStorerRepository(databaseConn)
 	if err != nil {
 		return err
