@@ -5,23 +5,6 @@ alwaysApply: false
 
 ## Diseño de Componentes
 
-### Interfaces por Vertical (ports.go)
-
-Cada vertical define solo las interfaces que necesita (Interface Segregation):
-
-```go
-// cmd/internal/creator/ports.go
-type WalletReserver interface {
-    Reserve(ctx context.Context, userID string, amount float64, paymentID string) error
-}
-
-// cmd/internal/processor/ports.go
-type WalletConfirmer interface {
-    Confirm(ctx context.Context, userID string, amount float64, paymentID string) error
-    Release(ctx context.Context, userID string, amount float64, paymentID string) error
-}
-```
-
 ### Wallet Client (shared)
 
 Implementación concreta que satisface todas las interfaces:
@@ -55,49 +38,47 @@ func main() {
 }
 ```
 
-### App Layer (cmd/app/router.go)
+### App Layer (cmd/app/api.go)
+
+Cada vertical expone una función `Start()` que encapsula su DI interno. El app layer solo conecta infraestructura con verticales:
 
 ```go
-func StartRouter(db *sql.DB, httpClient *http.Client) {
-    // Build wallet client
-    walletClient := client.NewWalletClient(httpClient)
-
-    // Build creator vertical
-    creatorRepo := creator.NewRepository(db)
-    creatorService := creator.NewService(creatorRepo, walletClient)
-    creatorHandler := creator.NewHandler(creatorService)
-
-    // Build finder vertical
-    finderRepo := finder.NewRepository(db)
-    finderService := finder.NewService(finderRepo)
-    finderHandler := finder.NewHandler(finderService)
-
-    // Setup routes
+func StartAPI(db interface{}, httpClient interface{}, rabbitConn interface{}) {
     router := gin.New()
-    router.POST("/api/v1/payments", creatorHandler.Create)
-    router.GET("/api/v1/payments/:id", finderHandler.Find)
+    api := router.Group("/api/v1")
+
+    // Each vertical owns its internal wiring
+    creator.Start(api, db, httpClient, rabbitConn)
+    finder.Start(api, db)
+
     router.Run(":3000")
 }
 ```
 
-### App Layer (cmd/app/consumer.go)
+### Vertical Start Pattern (cmd/internal/creator/router.go)
+
+Cada vertical encapsula su DI interno. El app layer no conoce los detalles:
 
 ```go
-func StartConsumer(db *sql.DB, rabbitConn *rabbitmq.Connection, httpClient *http.Client) {
-    // Build wallet client
-    walletClient := client.NewWalletClient(httpClient)
+func Start(rg *gin.RouterGroup, db, httpClient, rabbitConn interface{}) error {
+    // Internal wiring (hidden from app layer)
+    storer, _ := NewPaymentStorerRepository(db)
+    reserver, _ := NewWalletReserverRepository(httpClient)
+    publisher, _ := NewPaymentPublisherRepository(rabbitConn)
 
-    // Build processor vertical
-    processorRepo := processor.NewRepository(db)
-    gateway := processor.NewMockGateway()
-    processorService := processor.NewService(processorRepo, walletClient, gateway)
-    processorHandler := processor.NewHandler(processorService)
+    service, _ := NewPaymentCreatorService(storer, reserver, publisher)
+    handler, _ := NewHandler(service)
 
-    // Start consuming in background (its responsibility)
-    consumer := rabbitmq.NewConsumer(rabbitConn, "payments.created")
-    go consumer.Start(processorHandler)
+    rg.POST("/payments", handler.Create)
+    return nil
 }
 ```
+
+**Beneficios:**
+
+- **Encapsulación**: App layer no conoce detalles internos
+- **Bajo acoplamiento**: Cambios internos no afectan app layer
+- **Consistencia**: Todas las verticales siguen el mismo patrón
 
 ---
 
@@ -213,7 +194,7 @@ Operaciones:
     "payment_id": "pay_xyz789",
     "user_id": "usr_123",
     "amount": 100.0,
-    "status": "reserved"
+    "status": "reserved" // pending, reserved, completed, failed
   }
 }
 ```
@@ -482,7 +463,7 @@ payment := &Payment{
     IdempotencyKey: req.IdempotencyKey,
     UserID:         req.UserID,
     Amount:         req.Amount,
-    Status:         "pending",
+    Status:         domain.StatusPending,
 }
 
 // Event Store (fuente de verdad)
@@ -1274,46 +1255,62 @@ LIMIT 100;
 
 Protecciones a nivel de API y negocio para evitar operaciones duplicadas y race conditions.
 
-### 1. Idempotency Key (API) con PostgreSQL
+### 1. Idempotency Key (API)
 
-El cliente debe enviar un header `Idempotency-Key` para evitar pagos duplicados.
+El cliente envía `Idempotency-Key` en el header HTTP para evitar pagos duplicados:
 
 ```
 POST /api/v1/payments
 Headers:
   Idempotency-Key: "order-123-uuid"
+Body:
+{
+    "user_id": "usr_123",
+    "amount": 100.0,
+    "currency": "USD"
+}
 ```
 
-**Implementación:** Columna `idempotency_key UNIQUE` en la tabla `payments`.
+**Implementación:** Handler extrae el header y lo pasa al service como parámetro separado:
 
 ```go
-// creator/service.go
-func (s *Service) Create(req CreateRequest) (*Payment, error) {
-    var payment *Payment
+// creator/handler.go
+func (h *Handler) Create(c *gin.Context) {
+    ctx := c.Request.Context()
 
-    err := s.db.WithTransaction(ctx, func(tx *sql.Tx) error {
-        payment = &Payment{
-            ID:             uuid.New().String(),
-            IdempotencyKey: req.IdempotencyKey,
-            UserID:         req.UserID,
-            Amount:         req.Amount,
-            Status:         "pending",
-        }
-
-        // Event Store
-        tx.Exec(`INSERT INTO payment_events (...) VALUES (...)`, ...)
-
-        // Read Model (constraint UNIQUE en idempotency_key)
-        _, err := tx.Exec(`INSERT INTO payments (id, idempotency_key, ...) VALUES (...)`, ...)
-        return err
-    })
-
-    if isUniqueViolation(err) {
-        // Ya existe → retornar el payment existente
-        return s.repo.GetByIdempotencyKey(req.IdempotencyKey)
+    idempotencyKey := c.GetHeader("Idempotency-Key")
+    if idempotencyKey == "" {
+        c.JSON(http.StatusBadRequest, gin.H{"error": "Idempotency-Key header is required"})
+        return
     }
 
-    return payment, err
+    var req PaymentRequest
+    json.NewDecoder(c.Request.Body).Decode(&req)
+
+    payment, err := h.service.Create(ctx, idempotencyKey, &req)
+    // ...
+}
+
+// creator/service.go
+func (s *Service) Create(ctx context.Context, idempotencyKey string, req *PaymentRequest) (*Payment, error) {
+    // Step 1: Check if payment already exists
+    existing, err := s.storer.GetByIdempotencyKey(ctx, idempotencyKey)
+    if err != nil {
+        return nil, fmt.Errorf("failed to check idempotency: %w", err)
+    }
+    if existing != nil {
+        return existing, nil  // Return existing payment
+    }
+
+    // Step 2: Create new payment
+    payment := NewPayment(idempotencyKey, req.UserID, req.Amount, req.Currency)
+
+    if err := s.storer.Save(ctx, payment); err != nil {
+        return nil, fmt.Errorf("failed to save payment: %w", err)
+    }
+
+    // Continue with reserve, update status, publish...
+    return payment, nil
 }
 ```
 
@@ -1321,30 +1318,35 @@ func (s *Service) Create(req CreateRequest) (*Payment, error) {
 
 ```
 Request 1: Idempotency-Key: "abc123"
-├─ INSERT payment con idempotency_key = "abc123"
+├─ Check: GetByIdempotencyKey("abc123") → nil
+├─ Create + Save payment
 └─ Retornar 201
 
 Request 2: Idempotency-Key: "abc123" (retry)
-├─ INSERT falla (UNIQUE constraint)
-├─ SELECT WHERE idempotency_key = "abc123"
-└─ Retornar 200 (payment existente)
+├─ Check: GetByIdempotencyKey("abc123") → existing payment
+└─ Retornar existing payment (201)
 ```
+
+**Beneficios:**
+
+- Header estándar para idempotencia (patrón común en APIs)
+- Separación clara: header para control, body para datos
+- Lógica explícita y fácil de testear
 
 ### 2. Idempotencia en Consumer
 
-El `payment_id` es el idempotency key natural. Mensajes duplicados se ignoran silenciosamente (sin log):
+El `payment_id` es el idempotency key natural. Mensajes duplicados se ignoran silenciosamente:
 
 ```go
 // processor/service.go
-func (s *Service) Process(payment *Payment) error {
-    existing, _ := s.repo.GetByID(payment.ID)
+func (s *Service) Process(ctx context.Context, payment *Payment) error {
+    existing, _ := s.repo.GetByID(ctx, payment.ID)
 
     switch existing.Status {
-    case "completed", "failed":
-        s.metrics.DuplicateCounter.Inc()  // Solo incrementar métrica
+    case domain.StatusCompleted, domain.StatusFailed:
         return nil  // Ya procesado, skip silencioso + ACK
-    case "reserved":
-        return s.processPayment(payment)
+    case domain.StatusReserved:
+        return s.processPayment(ctx, payment)
     default:
         return nil  // Estado inesperado, skip + ACK
     }
@@ -1637,7 +1639,7 @@ func (s *Service) Process(ctx context.Context, payment *Payment) error {
         messagesProcessed.Add(ctx, 1)
     }()
 
-    if existing.Status == "completed" || existing.Status == "failed" {
+    if existing.Status == domain.StatusCompleted || existing.Status == domain.StatusFailed {
         duplicateMessages.Add(ctx, 1)
         return nil
     }
