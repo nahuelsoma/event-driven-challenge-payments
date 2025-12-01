@@ -47,6 +47,7 @@ func main() {
 	if err != nil {
 		log.Fatalf("api: failed to create RabbitMQ connection: %v", err)
 	}
+	defer messageBrokerConn.Close()
 
 	if err := app.StartAPI(dbConn, walletClient, messageBrokerConn, cfg.QueueName); err != nil {
 		log.Fatalf("api: failed to start API: %v", err)

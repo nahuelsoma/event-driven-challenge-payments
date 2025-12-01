@@ -3,6 +3,7 @@ package messagebroker
 import (
 	"errors"
 	"fmt"
+	"log/slog"
 
 	"github.com/streadway/amqp"
 )
@@ -22,6 +23,8 @@ func (c *Connection) Validate() error {
 
 // Connect establishes a TCP connection to RabbitMQ
 func Connect(url string) (*Connection, error) {
+	slog.Info("messagebroker: connecting to RabbitMQ", "url", url)
+
 	conn, err := amqp.Dial(url)
 	if err != nil {
 		return nil, fmt.Errorf("failed to connect to RabbitMQ: %w", err)
