@@ -3,27 +3,39 @@ package creator
 import (
 	"context"
 	"errors"
-	"log/slog"
+	"fmt"
 
 	"github.com/nahuelsoma/event-driven-challenge-payments/cmd/internal/shared/domain"
 )
 
-type PaymentPublisherRepository struct {
-	connection interface{}
+// MessageBroker interface for the infrastructure publisher
+type MessageBroker interface {
+	Publish(body []byte) error
 }
 
-func NewPaymentPublisherRepository(conn interface{}) (*PaymentPublisherRepository, error) {
-	if conn == nil {
-		return nil, errors.New("payment publisher: connection cannot be nil")
+type PaymentPublisherRepository struct {
+	messageBroker MessageBroker
+}
+
+func NewPaymentPublisherRepository(mb MessageBroker) (*PaymentPublisherRepository, error) {
+	if mb == nil {
+		return nil, errors.New("payment publisher: message broker cannot be nil")
 	}
 
 	return &PaymentPublisherRepository{
-		connection: conn,
+		messageBroker: mb,
 	}, nil
 }
 
 func (r *PaymentPublisherRepository) Publish(ctx context.Context, payment *domain.Payment) error {
-	slog.DebugContext(ctx, "[DEBUG] PaymentPublisherRepository.Publish called", "payment_id", payment.ID, "status", payment.Status)
-	// TODO: Implement the logic to publish the payment
+	data, err := payment.Marshal()
+	if err != nil {
+		return fmt.Errorf("publisher: failed to marshal payment: %w", err)
+	}
+
+	if err := r.messageBroker.Publish(data); err != nil {
+		return fmt.Errorf("publisher: failed to publish payment: %w", err)
+	}
+
 	return nil
 }
