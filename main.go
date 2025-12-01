@@ -37,7 +37,7 @@ func main() {
 		"port": "3000",
 	}
 
-	httpClient, err := http.NewHTTPClient(httpConfig)
+	walletClient, err := http.NewHTTPClient(httpConfig)
 	if err != nil {
 		log.Fatalf("api: failed to create HTTP client: %v", err)
 	}
@@ -48,7 +48,11 @@ func main() {
 		log.Fatalf("api: failed to create RabbitMQ connection: %v", err)
 	}
 
-	if err := app.StartAPI(dbConn, httpClient, messageBrokerConn); err != nil {
+	if err := app.StartAPI(dbConn, walletClient, messageBrokerConn, cfg.QueueName); err != nil {
 		log.Fatalf("api: failed to start API: %v", err)
+	}
+
+	if err := app.StartConsumer(dbConn, messageBrokerConn, walletClient, cfg.QueueName); err != nil {
+		log.Fatalf("api: failed to start consumer: %v", err)
 	}
 }
