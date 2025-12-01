@@ -8,23 +8,15 @@ import (
 	"github.com/nahuelsoma/event-driven-challenge-payments/cmd/internal/shared/domain"
 )
 
-// PaymentReader interface for reading payment status
-type PaymentReader interface {
+// PaymentResolver interface for resolving payment status
+type PaymentResolver interface {
 	GetByID(ctx context.Context, paymentID string) (*domain.Payment, error)
-}
-
-// PaymentUpdater interface for updating payment status
-type PaymentUpdater interface {
 	UpdateStatus(ctx context.Context, paymentID string, status domain.Status, gatewayRef string) error
 }
 
-// WalletConfirmer interface for confirming funds
-type WalletConfirmer interface {
+// WalletResolver interface for resolving funds
+type WalletResolver interface {
 	Confirm(ctx context.Context, userID string, amount float64, paymentID string) error
-}
-
-// WalletReleaser interface for releasing funds
-type WalletReleaser interface {
 	Release(ctx context.Context, userID string, amount float64, paymentID string) error
 }
 
@@ -35,42 +27,30 @@ type GatewayProcessor interface {
 
 // PaymentProcessorService handles payment processing business logic
 type PaymentProcessorService struct {
-	paymentReader    PaymentReader
-	paymentUpdater   PaymentUpdater
-	walletConfirmer  WalletConfirmer
-	walletReleaser   WalletReleaser
+	paymentResolver  PaymentResolver
+	walletResolver   WalletResolver
 	gatewayProcessor GatewayProcessor
 }
 
 // NewPaymentProcessorService creates a new PaymentProcessorService
 func NewPaymentProcessorService(
-	pr PaymentReader,
-	pu PaymentUpdater,
-	wc WalletConfirmer,
-	wr WalletReleaser,
+	pr PaymentResolver,
+	wr WalletResolver,
 	gp GatewayProcessor,
 ) (*PaymentProcessorService, error) {
 	if pr == nil {
-		return nil, errors.New("payment processor: reader cannot be nil")
-	}
-	if pu == nil {
-		return nil, errors.New("payment processor: updater cannot be nil")
-	}
-	if wc == nil {
-		return nil, errors.New("payment processor: wallet confirmer cannot be nil")
+		return nil, errors.New("payment processor: resolver cannot be nil")
 	}
 	if wr == nil {
-		return nil, errors.New("payment processor: wallet releaser cannot be nil")
+		return nil, errors.New("payment processor: wallet resolver cannot be nil")
 	}
 	if gp == nil {
 		return nil, errors.New("payment processor: gateway processor cannot be nil")
 	}
 
 	return &PaymentProcessorService{
-		paymentReader:    pr,
-		paymentUpdater:   pu,
-		walletConfirmer:  wc,
-		walletReleaser:   wr,
+		paymentResolver:  pr,
+		walletResolver:   wr,
 		gatewayProcessor: gp,
 	}, nil
 }
@@ -79,7 +59,7 @@ func NewPaymentProcessorService(
 // Flow: Check status (idempotency) → Process with gateway → Confirm/Release funds → Update status
 func (pps *PaymentProcessorService) Process(ctx context.Context, payment *domain.Payment) error {
 	// Step 1: Check payment status for idempotency
-	existing, err := pps.paymentReader.GetByID(ctx, payment.ID)
+	existing, err := pps.paymentResolver.GetByID(ctx, payment.ID)
 	if err != nil {
 		return fmt.Errorf("payment processor: failed to get payment: %w", err)
 	}
@@ -98,11 +78,11 @@ func (pps *PaymentProcessorService) Process(ctx context.Context, payment *domain
 	gatewayRef, err := pps.gatewayProcessor.Process(ctx, payment.ID, payment.Amount)
 	if err != nil {
 		// Gateway failed → Release funds and mark as failed
-		if releaseErr := pps.walletReleaser.Release(ctx, payment.UserID, payment.Amount, payment.ID); releaseErr != nil {
+		if releaseErr := pps.walletResolver.Release(ctx, payment.UserID, payment.Amount, payment.ID); releaseErr != nil {
 			return fmt.Errorf("payment processor: failed to release funds: %w", releaseErr)
 		}
 
-		if updateErr := pps.paymentUpdater.UpdateStatus(ctx, payment.ID, domain.StatusFailed, ""); updateErr != nil {
+		if updateErr := pps.paymentResolver.UpdateStatus(ctx, payment.ID, domain.StatusFailed, ""); updateErr != nil {
 			return fmt.Errorf("payment processor: failed to update status to failed: %w", updateErr)
 		}
 
@@ -110,12 +90,12 @@ func (pps *PaymentProcessorService) Process(ctx context.Context, payment *domain
 	}
 
 	// Step 3: Gateway succeeded → Confirm funds
-	if err := pps.walletConfirmer.Confirm(ctx, payment.UserID, payment.Amount, payment.ID); err != nil {
+	if err := pps.walletResolver.Confirm(ctx, payment.UserID, payment.Amount, payment.ID); err != nil {
 		return fmt.Errorf("payment processor: failed to confirm funds: %w", err)
 	}
 
 	// Step 4: Update status to completed
-	if err := pps.paymentUpdater.UpdateStatus(ctx, payment.ID, domain.StatusCompleted, gatewayRef); err != nil {
+	if err := pps.paymentResolver.UpdateStatus(ctx, payment.ID, domain.StatusCompleted, gatewayRef); err != nil {
 		return fmt.Errorf("payment processor: failed to update status to completed: %w", err)
 	}
 

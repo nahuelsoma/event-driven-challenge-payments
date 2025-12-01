@@ -4,17 +4,18 @@ import (
 	"context"
 	"errors"
 	"log/slog"
+	"net/http"
 
 	"github.com/google/uuid"
 )
 
 // GatewayProcessorRepository processes payments with external gateway
 type GatewayProcessorRepository struct {
-	client interface{}
+	client *http.Client
 }
 
 // NewGatewayProcessorRepository creates a new GatewayProcessorRepository
-func NewGatewayProcessorRepository(client interface{}) (*GatewayProcessorRepository, error) {
+func NewGatewayProcessorRepository(client *http.Client) (*GatewayProcessorRepository, error) {
 	if client == nil {
 		return nil, errors.New("gateway processor: client cannot be nil")
 	}
@@ -31,4 +32,3 @@ func (r *GatewayProcessorRepository) Process(ctx context.Context, paymentID stri
 	gatewayRef := "gw_" + uuid.New().String()
 	return gatewayRef, nil
 }
-

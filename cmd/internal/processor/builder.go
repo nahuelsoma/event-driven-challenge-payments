@@ -2,43 +2,43 @@ package processor
 
 import (
 	"log"
+	"time"
 
-	"github.com/nahuelsoma/event-driven-challenge-payments/infrastructure/http"
+	"net/http"
+
+	"github.com/nahuelsoma/event-driven-challenge-payments/cmd/internal/shared/repository/paymentstorer"
+	"github.com/nahuelsoma/event-driven-challenge-payments/cmd/internal/shared/repository/walletclient"
+	"github.com/nahuelsoma/event-driven-challenge-payments/infrastructure/restclient"
 )
 
-func Build(db paymentStorerDB, walletClient interface{}) (*Handler, error) {
-	ps, err := NewPaymentStorerRepository(db)
+// Build creates a new Handler with all dependencies wired up
+func Build(db paymentstorer.PaymentDB, rc *http.Client) (*Handler, error) {
+	ps, err := paymentstorer.NewStorer(db)
 	if err != nil {
 		return nil, err
 	}
 
-	wc, err := NewWalletConfirmerRepository(walletClient)
+	wc, err := walletclient.NewWalletClient(rc)
 	if err != nil {
 		return nil, err
 	}
 
-	wr, err := NewWalletReleaserRepository(walletClient)
-	if err != nil {
-		return nil, err
+	gatewayConfig := &restclient.Config{
+		BaseURL: "http://test-gateway-service.com",
+		Timeout: 300 * time.Millisecond,
 	}
 
-	// Create gateway client
-	gatewayConfig := map[string]string{
-		"host": "localhost",
-		"port": "3000",
-	}
-
-	gatewayClient, err := http.NewHTTPClient(gatewayConfig)
+	gatewayClient, err := restclient.NewRestClient(gatewayConfig)
 	if err != nil {
 		log.Fatalf("api: failed to create HTTP client: %v", err)
 	}
 
-	gp, err := NewGatewayProcessorRepository(gatewayClient)
+	gpr, err := NewGatewayProcessorRepository(gatewayClient)
 	if err != nil {
 		return nil, err
 	}
 
-	pps, err := NewPaymentProcessorService(ps, ps, wc, wr, gp)
+	pps, err := NewPaymentProcessorService(ps, wc, gpr)
 	if err != nil {
 		return nil, err
 	}
