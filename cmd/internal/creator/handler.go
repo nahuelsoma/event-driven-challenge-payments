@@ -60,7 +60,7 @@ func (h *Handler) Create(c *gin.Context) {
 	if err := pr.Validate(); err != nil {
 		slog.WarnContext(ctx, "Invalid payment request", "error", err)
 		c.JSON(http.StatusBadRequest, gin.H{
-			"message": "validation failed",
+			"message": err.Error(),
 			"error":   "bad request",
 		})
 		return
