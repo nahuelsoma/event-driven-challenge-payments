@@ -15,8 +15,8 @@ const (
 
 // StartConsumer initializes and starts the message consumer
 // Returns after setup is complete. Message consumption runs in background goroutines.
-func StartConsumer(db *database.DB, conn *messagebroker.Connection, walletClient interface{}, queueName string) error {
-	slog.Info("Starting consumer", "queue", queueName, "workers", workers)
+func StartConsumer(db *database.DB, conn *messagebroker.Connection, walletClient interface{}, exchange, queueName string) error {
+	slog.Info("Starting consumer", "exchange", exchange, "queue", queueName, "workers", workers)
 
 	// Create channel for consumer
 	channel, err := conn.NewChannel()
@@ -26,10 +26,12 @@ func StartConsumer(db *database.DB, conn *messagebroker.Connection, walletClient
 
 	slog.Info("Channel created", "channel", channel)
 
-	// Consumer configuration
+	// Consumer configuration with topic exchange for flexible routing
 	config := messagebroker.ConsumerConfig{
-		QueueName: queueName,
-		Workers:   workers,
+		Exchange:   exchange,
+		QueueName:  queueName,
+		RoutingKey: queueName, // Use queue name as routing key
+		Workers:    workers,
 	}
 
 	slog.Info("Consumer configuration", "config", config)

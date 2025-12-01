@@ -5,8 +5,8 @@ import (
 	"github.com/nahuelsoma/event-driven-challenge-payments/infrastructure/messagebroker"
 )
 
-func Start(rg *gin.RouterGroup, dc paymentStorerDB, c interface{}, mbc *messagebroker.Connection, queueName string) error {
-	h, err := Build(dc, c, mbc, queueName)
+func Start(rg *gin.RouterGroup, dc paymentStorerDB, c interface{}, mbc *messagebroker.Connection, exchange, queueName string) error {
+	h, err := Build(dc, c, mbc, exchange, queueName)
 	if err != nil {
 		return err
 	}

@@ -10,11 +10,13 @@ import (
 type Config struct {
 	Database      DatabaseConfig
 	MessageBroker MessageBrokerConfig
-	QueueName     string
+	Exchange      string // Exchange name for topic-based routing
+	QueueName     string // Queue name for this consumer
 }
 
 const (
-	queueName = "payments"
+	exchangeName = "payments"         // Topic exchange for all payment-related messages
+	queueName    = "payments.created" // Queue for payments pending processing
 )
 
 // Load reads environment variables and returns the application configuration
@@ -31,6 +33,7 @@ func Load() (*Config, error) {
 	return &Config{
 		Database:      dbConfig,
 		MessageBroker: messageBrokerConfig,
+		Exchange:      exchangeName,
 		QueueName:     queueName,
 	}, nil
 }

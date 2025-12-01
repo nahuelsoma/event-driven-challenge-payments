@@ -4,7 +4,7 @@ import (
 	"github.com/nahuelsoma/event-driven-challenge-payments/infrastructure/messagebroker"
 )
 
-func Build(dc paymentStorerDB, c interface{}, mbc *messagebroker.Connection, queueName string) (*Handler, error) {
+func Build(dc paymentStorerDB, c interface{}, mbc *messagebroker.Connection, exchange, queueName string) (*Handler, error) {
 	ps, err := NewPaymentStorerRepository(dc)
 	if err != nil {
 		return nil, err
@@ -18,8 +18,8 @@ func Build(dc paymentStorerDB, c interface{}, mbc *messagebroker.Connection, que
 	p, err := messagebroker.NewPublisher(
 		mbc,
 		messagebroker.PublisherConfig{
-			Exchange:   queueName,
-			RoutingKey: queueName,
+			Exchange:   exchange,  // Topic exchange for routing
+			RoutingKey: queueName, // Queue name as routing key (e.g., payments.created)
 		},
 	)
 	if err != nil {
