@@ -6,7 +6,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"log/slog"
 	"time"
 
 	"github.com/google/uuid"
@@ -38,8 +37,6 @@ func NewPaymentStorerRepository(db paymentStorerDB) (*PaymentStorerRepository, e
 
 // GetByID retrieves a payment by ID
 func (r *PaymentStorerRepository) GetByID(ctx context.Context, paymentID string) (*domain.Payment, error) {
-	slog.DebugContext(ctx, "[DEBUG] PaymentStorerRepository.GetByID called", "payment_id", paymentID)
-
 	query := `
 		SELECT id, idempotency_key, user_id, amount, currency, status, created_at, updated_at
 		FROM payments
@@ -71,8 +68,6 @@ func (r *PaymentStorerRepository) GetByID(ctx context.Context, paymentID string)
 
 // UpdateStatus updates the payment status with optional gateway reference
 func (r *PaymentStorerRepository) UpdateStatus(ctx context.Context, paymentID string, status domain.Status, gatewayRef string) error {
-	slog.DebugContext(ctx, "[DEBUG] PaymentStorerRepository.UpdateStatus called", "payment_id", paymentID, "status", status, "gateway_ref", gatewayRef)
-
 	// Build event payload
 	payload, err := json.Marshal(map[string]interface{}{
 		"payment_id":  paymentID,

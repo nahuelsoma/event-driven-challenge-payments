@@ -3,7 +3,7 @@ package messagebroker
 import (
 	"errors"
 	"fmt"
-	"log"
+	"log/slog"
 
 	"github.com/streadway/amqp"
 )
@@ -120,14 +120,12 @@ func (c *Consumer) Start(handler MessageHandler) error {
 }
 
 func (c *Consumer) worker(id int, msgs <-chan amqp.Delivery, handler MessageHandler) {
-	log.Printf("Worker %d started", id)
 	for msg := range msgs {
 		if err := handler.HandleMessage(msg.Body); err != nil {
-			log.Printf("Worker %d: error handling message: %v", id, err)
+			slog.Error("Worker failed to handle message", "worker_id", id, "error", err)
 			msg.Nack(false, true) // requeue
 		} else {
 			msg.Ack(false)
 		}
 	}
-	log.Printf("Worker %d stopped (channel closed)", id)
 }
