@@ -2,6 +2,8 @@ package main
 
 import (
 	"log"
+	"log/slog"
+	"os"
 
 	"github.com/nahuelsoma/event-driven-challenge-payments/cmd/app"
 	"github.com/nahuelsoma/event-driven-challenge-payments/infrastructure/database"
@@ -10,6 +12,11 @@ import (
 )
 
 func main() {
+	// Configure slog to show DEBUG level logs
+	slog.SetDefault(slog.New(slog.NewTextHandler(os.Stdout, &slog.HandlerOptions{
+		Level: slog.LevelDebug,
+	})))
+
 	// Create database connection
 	dbConfig := map[string]string{
 		"host":     "localhost",
