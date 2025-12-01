@@ -14,6 +14,7 @@ import (
 // PaymentFinder defines the interface for payment finding business logic
 type PaymentFinder interface {
 	Find(ctx context.Context, filter *PaymentFilter) (*domain.Payment, error)
+	FindEvents(ctx context.Context, paymentID string) ([]*domain.Event, error)
 }
 
 // Handler handles HTTP requests for payment operations
@@ -68,5 +69,36 @@ func (h *Handler) Find(c *gin.Context) {
 	c.JSON(http.StatusOK, gin.H{
 		"message": "payment found successfully",
 		"data":    payment,
+	})
+}
+
+// FindEvents handles GET /payments/:id/events requests
+func (h *Handler) FindEvents(c *gin.Context) {
+	ctx := c.Request.Context()
+
+	paymentID := c.Param("id")
+	filter := &PaymentFilter{PaymentID: paymentID}
+
+	if err := filter.Validate(); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{
+			"message": err.Error(),
+			"error":   "bad request",
+		})
+		return
+	}
+
+	events, err := h.paymentFinder.FindEvents(ctx, paymentID)
+	if err != nil {
+		slog.ErrorContext(ctx, "Failed to find events", "error", err, "payment_id", paymentID)
+		c.JSON(http.StatusInternalServerError, gin.H{
+			"message": "failed to find events",
+			"error":   "internal server error",
+		})
+		return
+	}
+
+	c.JSON(http.StatusOK, gin.H{
+		"message": "events found successfully",
+		"data":    events,
 	})
 }
