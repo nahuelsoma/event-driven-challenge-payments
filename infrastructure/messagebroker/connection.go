@@ -1,6 +1,7 @@
 package messagebroker
 
 import (
+	"errors"
 	"fmt"
 
 	"github.com/streadway/amqp"
@@ -9,6 +10,14 @@ import (
 // Connection represents a TCP connection to RabbitMQ
 type Connection struct {
 	conn *amqp.Connection
+}
+
+// Validate validates the connection
+func (c *Connection) Validate() error {
+	if c.conn == nil {
+		return errors.New("connection: connection cannot be nil")
+	}
+	return nil
 }
 
 // Connect establishes a TCP connection to RabbitMQ
