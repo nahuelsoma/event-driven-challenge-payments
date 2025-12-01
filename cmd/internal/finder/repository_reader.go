@@ -55,3 +55,41 @@ func (r *PaymentReaderRepository) GetByID(ctx context.Context, paymentID string)
 
 	return &payment, nil
 }
+
+func (r *PaymentReaderRepository) GetEventsByPaymentID(ctx context.Context, paymentID string) ([]*domain.Event, error) {
+	query := `
+		SELECT id, payment_id, sequence, event_type, payload, created_at
+		FROM payment_events
+		WHERE payment_id = $1
+		ORDER BY sequence ASC
+	`
+
+	rows, err := r.db.Conn().QueryContext(ctx, query, paymentID)
+	if err != nil {
+		return nil, fmt.Errorf("payment reader: get events by payment id: %w", err)
+	}
+	defer rows.Close()
+
+	events := []*domain.Event{}
+	for rows.Next() {
+		var event domain.Event
+		err := rows.Scan(
+			&event.ID,
+			&event.PaymentID,
+			&event.Sequence,
+			&event.EventType,
+			&event.Payload,
+			&event.CreatedAt,
+		)
+		if err != nil {
+			return nil, fmt.Errorf("payment reader: scan event: %w", err)
+		}
+		events = append(events, &event)
+	}
+
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("payment reader: iterate events: %w", err)
+	}
+
+	return events, nil
+}
