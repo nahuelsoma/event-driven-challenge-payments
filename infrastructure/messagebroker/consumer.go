@@ -15,8 +15,10 @@ type MessageHandler interface {
 
 // ConsumerConfig configures a consumer
 type ConsumerConfig struct {
-	QueueName string
-	Workers   int
+	Exchange   string // Exchange name for topic-based routing
+	QueueName  string // Queue name to consume from
+	RoutingKey string // Routing key for binding (usually same as queue name)
+	Workers    int
 }
 
 // Consumer consumes messages from RabbitMQ
@@ -30,8 +32,14 @@ func NewConsumer(channel *Channel, config ConsumerConfig) (*Consumer, error) {
 	if channel == nil || channel.ch == nil {
 		return nil, errors.New("consumer: channel cannot be nil")
 	}
+	if config.Exchange == "" {
+		return nil, errors.New("consumer: exchange name cannot be empty")
+	}
 	if config.QueueName == "" {
 		return nil, errors.New("consumer: queue name cannot be empty")
+	}
+	if config.RoutingKey == "" {
+		config.RoutingKey = config.QueueName // Default routing key to queue name
 	}
 	if config.Workers < 1 {
 		config.Workers = 1
@@ -45,17 +53,43 @@ func NewConsumer(channel *Channel, config ConsumerConfig) (*Consumer, error) {
 
 // Start starts consuming messages
 func (c *Consumer) Start(handler MessageHandler) error {
+	// Declare topic exchange for flexible routing
+	err := c.channel.ch.ExchangeDeclare(
+		c.config.Exchange, // exchange name
+		"topic",           // topic exchange allows pattern-based routing
+		true,              // durable
+		false,             // auto-delete
+		false,             // internal
+		false,             // no-wait
+		nil,               // args
+	)
+	if err != nil {
+		return fmt.Errorf("failed to declare exchange: %w", err)
+	}
+
 	// Declare queue
-	_, err := c.channel.ch.QueueDeclare(
-		c.config.QueueName,
-		true,  // durable
-		false, // auto-delete
-		false, // exclusive
-		false, // no-wait
-		nil,   // args
+	_, err = c.channel.ch.QueueDeclare(
+		c.config.QueueName, // queue name
+		true,               // durable
+		false,              // auto-delete
+		false,              // exclusive
+		false,              // no-wait
+		nil,                // args
 	)
 	if err != nil {
 		return fmt.Errorf("failed to declare queue: %w", err)
+	}
+
+	// Bind queue to exchange with routing key
+	err = c.channel.ch.QueueBind(
+		c.config.QueueName,  // queue name
+		c.config.RoutingKey, // routing key
+		c.config.Exchange,   // exchange
+		false,               // no-wait
+		nil,                 // args
+	)
+	if err != nil {
+		return fmt.Errorf("failed to bind queue to exchange: %w", err)
 	}
 
 	// Set prefetch count

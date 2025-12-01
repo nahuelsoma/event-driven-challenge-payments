@@ -10,16 +10,17 @@ import (
 	"github.com/nahuelsoma/event-driven-challenge-payments/cmd/internal/creator"
 	"github.com/nahuelsoma/event-driven-challenge-payments/cmd/internal/finder"
 	"github.com/nahuelsoma/event-driven-challenge-payments/infrastructure/database"
+	"github.com/nahuelsoma/event-driven-challenge-payments/infrastructure/messagebroker"
 )
 
 // StartAPI initializes and starts the HTTP API server
-func StartAPI(database *database.DB, httpClient interface{}, messageBroker interface{}) error {
+func StartAPI(database *database.DB, httpClient interface{}, messageBroker *messagebroker.Connection, exchange, queueName string) error {
 	r := gin.New()
 
 	apiV1 := r.Group("/api/v1")
 
 	// Each vertical owns its internal wiring
-	if err := creator.Start(apiV1, database, httpClient, messageBroker); err != nil {
+	if err := creator.Start(apiV1, database, httpClient, messageBroker, exchange, queueName); err != nil {
 		return fmt.Errorf("api: failed to start creator vertical: %w", err)
 	}
 

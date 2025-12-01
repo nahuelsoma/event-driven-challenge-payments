@@ -5,17 +5,7 @@ import (
 )
 
 func Start(rg *gin.RouterGroup, db paymentReaderDB) error {
-	pr, err := NewPaymentReaderRepository(db)
-	if err != nil {
-		return err
-	}
-
-	pf, err := NewPaymentFinderService(pr)
-	if err != nil {
-		return err
-	}
-
-	h, err := NewHandler(pf)
+	h, err := Build(db)
 	if err != nil {
 		return err
 	}

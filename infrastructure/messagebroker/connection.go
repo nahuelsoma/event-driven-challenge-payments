@@ -1,7 +1,9 @@
 package messagebroker
 
 import (
+	"errors"
 	"fmt"
+	"log/slog"
 
 	"github.com/streadway/amqp"
 )
@@ -11,8 +13,18 @@ type Connection struct {
 	conn *amqp.Connection
 }
 
+// Validate validates the connection
+func (c *Connection) Validate() error {
+	if c.conn == nil {
+		return errors.New("connection: connection cannot be nil")
+	}
+	return nil
+}
+
 // Connect establishes a TCP connection to RabbitMQ
 func Connect(url string) (*Connection, error) {
+	slog.Info("messagebroker: connecting to RabbitMQ", "url", url)
+
 	conn, err := amqp.Dial(url)
 	if err != nil {
 		return nil, fmt.Errorf("failed to connect to RabbitMQ: %w", err)

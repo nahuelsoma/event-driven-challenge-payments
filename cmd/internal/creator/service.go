@@ -83,6 +83,8 @@ func (pcs *PaymentCreatorService) Create(ctx context.Context, idempotencyKey str
 		return nil, fmt.Errorf("payment creator: failed to update payment status: %w", err)
 	}
 
+	payment.UpdateStatus(domain.StatusReserved)
+
 	// Step 6: Publish payment event
 	if err := pcs.paymentPublisher.Publish(ctx, payment); err != nil {
 		return nil, fmt.Errorf("payment creator: failed to publish payment: %w", err)

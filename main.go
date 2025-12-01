@@ -9,7 +9,7 @@ import (
 	"github.com/nahuelsoma/event-driven-challenge-payments/config"
 	"github.com/nahuelsoma/event-driven-challenge-payments/infrastructure/database"
 	"github.com/nahuelsoma/event-driven-challenge-payments/infrastructure/http"
-	messagebroker "github.com/nahuelsoma/event-driven-challenge-payments/infrastructure/message_broker"
+	"github.com/nahuelsoma/event-driven-challenge-payments/infrastructure/messagebroker"
 )
 
 func main() {
@@ -27,7 +27,7 @@ func main() {
 	// Create database connection
 	dbConn, err := database.NewPostgresConnection(cfg.Database.URL())
 	if err != nil {
-		log.Fatalf("api: failed to create database connection: %v", err)
+		log.Fatalf("main: failed to create database connection: %v", err)
 	}
 	defer dbConn.Close()
 
@@ -37,18 +37,25 @@ func main() {
 		"port": "3000",
 	}
 
-	httpClient, err := http.NewHTTPClient(httpConfig)
+	walletClient, err := http.NewHTTPClient(httpConfig)
 	if err != nil {
-		log.Fatalf("api: failed to create HTTP client: %v", err)
+		log.Fatalf("main: failed to create HTTP client: %v", err)
 	}
 
 	// Create RabbitMQ connection
 	messageBrokerConn, err := messagebroker.Connect(cfg.MessageBroker.URL())
 	if err != nil {
-		log.Fatalf("api: failed to create RabbitMQ connection: %v", err)
+		log.Fatalf("main: failed to create RabbitMQ connection: %v", err)
+	}
+	defer messageBrokerConn.Close()
+
+	// Start consumer first (runs in background goroutines)
+	if err := app.StartConsumer(dbConn, messageBrokerConn, walletClient, cfg.Exchange, cfg.QueueName); err != nil {
+		log.Fatalf("main: failed to start consumer: %v", err)
 	}
 
-	if err := app.StartAPI(dbConn, httpClient, messageBrokerConn); err != nil {
-		log.Fatalf("api: failed to start API: %v", err)
+	// Start API server (blocks to keep the application running)
+	if err := app.StartAPI(dbConn, walletClient, messageBrokerConn, cfg.Exchange, cfg.QueueName); err != nil {
+		log.Fatalf("main: failed to start API: %v", err)
 	}
 }
