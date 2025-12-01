@@ -9,10 +9,11 @@ import (
 	"github.com/gin-gonic/gin"
 	"github.com/nahuelsoma/event-driven-challenge-payments/cmd/internal/creator"
 	"github.com/nahuelsoma/event-driven-challenge-payments/cmd/internal/finder"
+	"github.com/nahuelsoma/event-driven-challenge-payments/infrastructure/database"
 )
 
 // StartAPI initializes and starts the HTTP API server
-func StartAPI(database interface{}, httpClient interface{}, messageBroker interface{}) error {
+func StartAPI(database *database.DB, httpClient interface{}, messageBroker interface{}) error {
 	r := gin.New()
 
 	apiV1 := r.Group("/api/v1")
