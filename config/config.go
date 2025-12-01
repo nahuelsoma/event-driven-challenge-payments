@@ -10,7 +10,12 @@ import (
 type Config struct {
 	Database      DatabaseConfig
 	MessageBroker MessageBrokerConfig
+	QueueName     string
 }
+
+const (
+	queueName = "payments"
+)
 
 // Load reads environment variables and returns the application configuration
 func Load() (*Config, error) {
@@ -26,6 +31,7 @@ func Load() (*Config, error) {
 	return &Config{
 		Database:      dbConfig,
 		MessageBroker: messageBrokerConfig,
+		QueueName:     queueName,
 	}, nil
 }
 
