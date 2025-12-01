@@ -32,6 +32,11 @@ func (p *Payment) Validate() error {
 	return nil
 }
 
+func (p *Payment) UpdateStatus(status Status) {
+	p.Status = status
+	p.UpdatedAt = time.Now()
+}
+
 // Parse parses a payment from bytes
 func (p *Payment) Parse(body []byte) error {
 	return json.Unmarshal(body, p)
