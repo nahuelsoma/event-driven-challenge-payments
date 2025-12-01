@@ -1,0 +1,2133 @@
+---
+description: Go Testing Guidelines with Testify
+globs:
+alwaysApply: false
+---
+
+# Go Testing Guidelines with Testify
+
+## Executive Summary
+
+This comprehensive guide establishes professional Go testing standards using the Testify framework. It transforms teams from basic testing approaches to enterprise-grade test engineering practices through systematic adoption of table-driven testing patterns.
+
+**Key Benefits:**
+
+- **🚀 Team Velocity**: Reduce debugging time by 60% through comprehensive error case coverage
+- **📊 Code Quality**: Achieve 90%+ test coverage with maintainable, self-documenting tests
+- **🔧 Maintainability**: Single test functions that scale from 3 to 30+ scenarios without complexity growth
+- **👥 Team Alignment**: Standardized patterns that work across all experience levels
+
+> **🎯 KEY PRINCIPLE**: Use **Comprehensive Table-Driven Tests with Error Cases** as your default testing approach. This method provides thorough coverage, clear documentation, and maintainable test code. Simple, isolated test functions should be the exception, not the rule.
+
+## Table of Contents
+
+### Quick Reference
+
+- [Essential Patterns Cheat Sheet](#quick-reference-essential-patterns)
+
+### Part I: Getting Started
+
+1. [Testing Fundamentals](#testing-fundamentals)
+2. [Testify Setup and Overview](#testify-setup-and-overview)
+3. [Comprehensive Table-Driven Testing (The Standard Approach)](#comprehensive-table-driven-testing-the-standard-approach)
+4. [Arrange-Act-Assert Pattern](#arrange-act-assert-pattern)
+5. [Assertions](#assertions)
+6. [BDD-Style Test Names (Behavior-Driven Development)](#bdd-style-test-names-behavior-driven-development)
+
+### Part II: Advanced Patterns
+
+7. [Advanced Table-Driven Testing Patterns](#advanced-table-driven-testing-patterns)
+8. [Test Suites](#test-suites)
+9. [Mocking with Testify](#mocking-with-testify)
+10. [Test Organization](#test-organization)
+11. [Test Coverage](#test-coverage)
+12. [Best Practices](#best-practices)
+
+### Reference Materials
+
+- [Glossary](#glossary)
+- [Summary](#summary)
+
+---
+
+## Quick Reference: Essential Patterns
+
+### 🚀 Standard Table-Driven Test Template
+
+```go
+func TestFunction_Name(t *testing.T) {
+    tests := []struct {
+        name           string
+        input          InputType
+        expectedResult ResultType
+        expectedError  error
+    }{
+        {
+            name:           "when [condition] it should [behavior] and no error",
+            input:          validInput,
+            expectedResult: expectedOutput,
+            expectedError:  nil,
+        },
+        {
+            name:          "when [error condition] it should return error",
+            input:         invalidInput,
+            expectedError: errors.New("expected error message"),
+        },
+    }
+
+    for _, tt := range tests {
+        t.Run(tt.name, func(t *testing.T) {
+            // Arrange
+            setup := prepareTestSetup()
+
+            // Act
+            result, err := FunctionUnderTest(tt.input)
+
+            // Assert
+            if tt.expectedError != nil {
+                assert.Error(t, err)
+                assert.Equal(t, tt.expectedError.Error(), err.Error())
+            } else {
+                assert.NoError(t, err)
+                assert.Equal(t, tt.expectedResult, result)
+            }
+        })
+    }
+}
+```
+
+### 🎯 Common Assertions Quick Reference
+
+```go
+// Basic assertions
+assert.Equal(t, expected, actual)
+assert.Error(t, err) / assert.NoError(t, err)
+assert.True(t, condition) / assert.False(t, condition)
+assert.Nil(t, value) / assert.NotNil(t, value)
+
+// Collection assertions
+assert.Len(t, slice, expectedLength)
+assert.Contains(t, slice, element)
+assert.ElementsMatch(t, expected, actual)
+
+// Error-specific assertions
+assert.EqualError(t, err, "expected message")
+assert.ErrorIs(t, err, targetError)
+assert.ErrorAs(t, err, &targetType)
+```
+
+### 🏗️ Mock Setup Pattern
+
+```go
+// In test loop:
+mockService := new(MockService)
+if tt.shouldCallMock {
+    mockService.On("Method", mock.Anything).Return(tt.mockResponse)
+}
+// ... test execution
+mockService.AssertExpectations(t)
+```
+
+### 📋 BDD Test Naming Formula
+
+```
+"when [condition/trigger] it should [expected behavior] and [error status]"
+
+Examples:
+"when user provides valid data it should create user successfully and no error"
+"when email already exists it should return validation error"
+```
+
+**[↑ Back to Top](#go-testing-guidelines-with-testify)**
+
+---
+
+## Part I: Getting Started
+
+### 1. Testing Fundamentals
+
+#### Test File Naming
+
+Test files should end with `_test.go` and be in the same package as the code being tested.
+
+```go
+// file: user.go
+package user
+
+type User struct {
+    ID   int
+    Name string
+}
+
+func (u *User) IsValid() bool {
+    return u.ID > 0 && u.Name != ""
+}
+```
+
+```go
+// file: user_test.go
+package user
+
+import (
+    "testing"
+    "github.com/stretchr/testify/assert"
+)
+
+func TestUser_IsValid(t *testing.T) {
+    user := &User{ID: 1, Name: "John"}
+    assert.True(t, user.IsValid())
+}
+```
+
+#### Test Function Naming
+
+Test functions must start with `Test` and follow the pattern `TestFunctionName` or `TestType_Method`.
+
+```go
+// Testing a function
+func TestCalculateTotal(t *testing.T) { }
+
+// Testing a method
+func TestUser_IsValid(t *testing.T) { }
+func TestUser_GetDisplayName(t *testing.T) { }
+
+// Testing specific scenarios
+func TestUser_IsValid_WithEmptyName_ReturnsFalse(t *testing.T) { }
+```
+
+> 💡 **Quick Start**: For a comprehensive template and common patterns, see the [Quick Reference section](#quick-reference-essential-patterns).
+
+### 2. Testify Setup and Overview
+
+#### Installation
+
+```bash
+go mod init your-project
+go get github.com/stretchr/testify
+```
+
+#### Core Testify Packages
+
+- `assert`: Basic assertions
+- `require`: Assertions that stop test execution on failure
+- `suite`: Test suites for setup/teardown
+- `mock`: Mocking functionality
+
+```go
+import (
+    "testing"
+    "github.com/stretchr/testify/assert"
+    "github.com/stretchr/testify/require"
+    "github.com/stretchr/testify/suite"
+    "github.com/stretchr/testify/mock"
+)
+```
+
+**[↑ Back to Top](#go-testing-guidelines-with-testify)**
+
+### 3. Comprehensive Table-Driven Testing (The Standard Approach)
+
+**This is the recommended approach for almost all Go tests.** Instead of writing simple, isolated test functions, use comprehensive table-driven tests that cover multiple scenarios, edge cases, and error conditions in a single, well-structured test function.
+
+#### Why Table-Driven Tests with Error Cases?
+
+- **Comprehensive Coverage**: Test multiple scenarios in one function
+- **Easy to Extend**: Add new test cases without duplicating test logic
+- **Clear Documentation**: Each test case documents expected behavior
+- **Error Handling**: Explicitly test both success and failure cases
+- **Maintainable**: Single test function to maintain per method/function
+
+> 📚 **Related Sections**: See [BDD-Style Test Names](#bdd-style-test-names-behavior-driven-development) for naming conventions and [Arrange-Act-Assert Pattern](#arrange-act-assert-pattern) for test structure.
+
+#### Example: Testing a Simple Function
+
+```go
+// math.go
+package math
+
+import "errors"
+
+func Add(a, b int) int {
+    return a + b
+}
+
+func Divide(a, b float64) (float64, error) {
+    if b == 0 {
+        return 0, errors.New("division by zero")
+    }
+    return a / b, nil
+}
+```
+
+```go
+// math_test.go - The Standard Approach
+package math
+
+import (
+    "math"
+    "testing"
+    "github.com/stretchr/testify/assert"
+)
+
+func TestAdd(t *testing.T) {
+    tests := []struct {
+        name           string
+        a              int
+        b              int
+        expectedResult int
+        expectedError  error
+    }{
+        {
+            name:           "when adding positive numbers it should return the correct sum and no error",
+            a:              2,
+            b:              3,
+            expectedResult: 5,
+            expectedError:  nil,
+        },
+        {
+            name:           "when adding negative numbers it should return the correct sum and no error",
+            a:              -2,
+            b:              -3,
+            expectedResult: -5,
+            expectedError:  nil,
+        },
+        {
+            name:           "when adding mixed sign numbers it should return the correct sum and no error",
+            a:              -2,
+            b:              3,
+            expectedResult: 1,
+            expectedError:  nil,
+        },
+        {
+            name:           "when adding zero values it should return zero and no error",
+            a:              0,
+            b:              0,
+            expectedResult: 0,
+            expectedError:  nil,
+        },
+        {
+            name:           "when adding large numbers it should handle them correctly and no error",
+            a:              1000,
+            b:              2000,
+            expectedResult: 3000,
+            expectedError:  nil,
+        },
+        {
+            name:           "when adding at maximum int boundary it should handle overflow and no error",
+            a:              math.MaxInt32,
+            b:              1,
+            expectedResult: math.MaxInt32 + 1,
+            expectedError:  nil,
+        },
+    }
+
+    for _, tt := range tests {
+        t.Run(tt.name, func(t *testing.T) {
+            // Arrange
+            // (No additional setup needed for this simple function)
+
+            // Act
+            result := Add(tt.a, tt.b)
+
+            // Assert
+            if tt.expectedError != nil {
+                // Note: This simple Add function doesn't return errors
+                // but we keep the pattern for consistency
+                assert.Equal(t, 0, result)
+            } else {
+                assert.Equal(t, tt.expectedResult, result)
+            }
+        })
+    }
+}
+
+func TestDivide(t *testing.T) {
+    tests := []struct {
+        name           string
+        a              float64
+        b              float64
+        expectedResult float64
+        expectedError  error
+    }{
+        {
+            name:           "when dividing valid numbers it should return the correct quotient and no error",
+            a:              10.0,
+            b:              2.0,
+            expectedResult: 5.0,
+            expectedError:  nil,
+        },
+        {
+            name:          "when attempting division by zero it should return zero value and error with message containing 'division by zero'",
+            a:             10.0,
+            b:             0.0,
+            expectedResult: 0.0,
+            expectedError: errors.New("division by zero"),
+        },
+        {
+            name:           "when dividing negative numbers it should return the correct quotient and no error",
+            a:              -10.0,
+            b:              -2.0,
+            expectedResult: 5.0,
+            expectedError:  nil,
+        },
+        {
+            name:           "when division produces floating point it should return decimal result and no error",
+            a:              10.0,
+            b:              3.0,
+            expectedResult: 3.3333333333333335,
+            expectedError:  nil,
+        },
+        {
+            name:           "when dividend is zero it should return zero and no error",
+            a:              0.0,
+            b:              5.0,
+            expectedResult: 0.0,
+            expectedError:  nil,
+        },
+    }
+
+    for _, tt := range tests {
+        t.Run(tt.name, func(t *testing.T) {
+            // Arrange
+            // (No additional setup needed for this simple function)
+
+            // Act
+            result, err := Divide(tt.a, tt.b)
+
+            // Assert
+            if tt.expectedError != nil {
+                assert.Error(t, err)
+                assert.Equal(t, tt.expectedError.Error(), err.Error())
+                assert.Equal(t, tt.expectedResult, result)
+            } else {
+                assert.NoError(t, err)
+                assert.Equal(t, tt.expectedResult, result)
+            }
+        })
+    }
+}
+```
+
+#### Testing Struct Methods with the Standard Approach
+
+```go
+// calculator.go
+package calculator
+
+import "fmt"
+
+type Calculator struct {
+    history []string
+}
+
+func NewCalculator() *Calculator {
+    return &Calculator{
+        history: make([]string, 0),
+    }
+}
+
+func (c *Calculator) Add(a, b int) (int, error) {
+    if a > 1000000 || b > 1000000 {
+        return 0, fmt.Errorf("numbers too large: max 1000000")
+    }
+    result := a + b
+    c.history = append(c.history, fmt.Sprintf("%d + %d = %d", a, b, result))
+    return result, nil
+}
+
+func (c *Calculator) GetHistory() []string {
+    return c.history
+}
+```
+
+```go
+// calculator_test.go - Standard Approach
+package calculator
+
+import (
+    "fmt"
+    "testing"
+    "github.com/stretchr/testify/assert"
+    "github.com/stretchr/testify/require"
+)
+
+func TestCalculator_Add(t *testing.T) {
+    tests := []struct {
+        name             string
+        a                int
+        b                int
+        expectedResult   int
+        expectedError    error
+        expectedHistory  int // number of history entries
+    }{
+        {
+            name:            "when given positive numbers it should calculate sum and add to history and no error",
+            a:               2,
+            b:               3,
+            expectedResult:  5,
+            expectedError:   nil,
+            expectedHistory: 1,
+        },
+        {
+            name:            "when given negative numbers it should calculate sum and add to history and no error",
+            a:               -2,
+            b:               -3,
+            expectedResult:  -5,
+            expectedError:   nil,
+            expectedHistory: 1,
+        },
+        {
+            name:            "when given zero values it should calculate result and add to history and no error",
+            a:               0,
+            b:               0,
+            expectedResult:  0,
+            expectedError:   nil,
+            expectedHistory: 1,
+        },
+        {
+            name:          "when first parameter exceeds maximum limit it should return error",
+            a:             1000001,
+            b:             5,
+            expectedError: fmt.Errorf("numbers too large: max 1000000"),
+            expectedHistory: 0,
+        },
+        {
+            name:          "when second parameter exceeds maximum limit it should return error",
+            a:             5,
+            b:             1000001,
+            expectedError: fmt.Errorf("numbers too large: max 1000000"),
+            expectedHistory: 0,
+        },
+    }
+
+    for _, tt := range tests {
+        t.Run(tt.name, func(t *testing.T) {
+            // Arrange
+            calc := NewCalculator()
+
+            // Act
+            result, err := calc.Add(tt.a, tt.b)
+
+            // Assert
+            if tt.expectedError != nil {
+                assert.Error(t, err)
+                assert.Contains(t, err.Error(), tt.expectedError.Error())
+                assert.Equal(t, 0, result)
+            } else {
+                assert.NoError(t, err)
+                assert.Equal(t, tt.expectedResult, result)
+            }
+
+            assert.Len(t, calc.GetHistory(), tt.expectedHistory)
+
+            if tt.expectedHistory > 0 {
+                assert.Contains(t, calc.GetHistory()[0],
+                    fmt.Sprintf("%d + %d = %d", tt.a, tt.b, tt.expectedResult))
+            }
+        })
+    }
+}
+
+func TestNewCalculator(t *testing.T) {
+    tests := []struct {
+        name string
+    }{
+        {"when instantiated it should create calculator with empty history and no error"},
+    }
+
+    for _, tt := range tests {
+        t.Run(tt.name, func(t *testing.T) {
+            // Arrange
+            // (No additional setup needed)
+
+            // Act
+            calc := NewCalculator()
+
+            // Assert
+            require.NotNil(t, calc)
+            assert.Empty(t, calc.GetHistory())
+        })
+    }
+}
+```
+
+### 4. Arrange-Act-Assert Pattern
+
+**All test implementations must follow the Arrange-Act-Assert (AAA) pattern** to ensure clear, readable, and maintainable test structure. This pattern divides each test into three distinct phases, making the test's intent and flow explicit.
+
+#### The Three Phases
+
+##### 1. **Arrange** 📋
+
+Set up the test data, configure mocks, and prepare the system under test.
+
+- Create input data and expected outputs
+- Initialize mocks and their behavior
+- Set up the system under test (service, handler, etc.)
+
+##### 2. **Act** ⚡
+
+Execute the single operation being tested.
+
+- Call the method or function being tested
+- Perform only ONE action per test
+- This should be the shortest section
+
+##### 3. **Assert** ✅
+
+Verify the results and behavior.
+
+- Check return values, errors, and side effects
+- Verify mock expectations were met
+- Assert the system reached the expected state
+
+#### AAA Pattern Benefits
+
+- **🔍 Clarity**: Each test phase has a single, clear responsibility
+- **📖 Readability**: Easy to understand what the test does and why
+- **🔧 Maintainability**: Changes to setup, execution, or verification are isolated
+- **🚀 Debugging**: Failures point to specific phases (setup, execution, or verification)
+- **📚 Documentation**: The pattern itself documents the test structure
+
+#### Basic AAA Example
+
+```go
+func TestCalculator_Add(t *testing.T) {
+    tests := []struct {
+        name           string
+        a              int
+        b              int
+        expectedResult int
+    }{
+        {
+            name:           "when adding positive numbers it should return the correct sum and no error",
+            a:              2,
+            b:              3,
+            expectedResult: 5,
+        },
+    }
+
+    for _, tt := range tests {
+        t.Run(tt.name, func(t *testing.T) {
+            // Arrange
+            calculator := NewCalculator()
+
+            // Act
+            result := calculator.Add(tt.a, tt.b)
+
+            // Assert
+            assert.Equal(t, tt.expectedResult, result)
+        })
+    }
+}
+```
+
+#### AAA with Error Handling
+
+```go
+func TestUserService_CreateUser(t *testing.T) {
+    tests := []struct {
+        name           string
+        user           *User
+        expectedError  error
+    }{
+        {
+            name:          "when valid user data is provided it should create user successfully and no error",
+            user:          &User{Name: "John", Email: "john@example.com"},
+            expectedError: nil,
+        },
+        {
+            name:          "when user name is empty it should return validation error",
+            user:          &User{Name: "", Email: "john@example.com"},
+            expectedError: errors.New("name cannot be empty"),
+        },
+    }
+
+    for _, tt := range tests {
+        t.Run(tt.name, func(t *testing.T) {
+            // Arrange
+            service := NewUserService()
+
+            // Act
+            err := service.CreateUser(tt.user)
+
+            // Assert
+            if tt.expectedError != nil {
+                assert.Error(t, err)
+                assert.Equal(t, tt.expectedError.Error(), err.Error())
+            } else {
+                assert.NoError(t, err)
+            }
+        })
+    }
+}
+```
+
+#### AAA with Mocks
+
+```go
+func TestUserService_GetUser(t *testing.T) {
+    tests := []struct {
+        name           string
+        userID         int
+        mockUser       *User
+        mockError      error
+        expectedUser   *User
+        expectedError  string
+        hasError       bool
+    }{
+        {
+            name:         "when repository finds existing user it should return user object and no error",
+            userID:       1,
+            mockUser:     &User{ID: 1, Name: "John"},
+            mockError:    nil,
+            expectedUser: &User{ID: 1, Name: "John"},
+            hasError:     false,
+        },
+    }
+
+    for _, tt := range tests {
+        t.Run(tt.name, func(t *testing.T) {
+            // Arrange
+            mockRepo := new(MockUserRepository)
+            mockRepo.On("GetUser", tt.userID).Return(tt.mockUser, tt.mockError)
+            service := NewUserService(mockRepo)
+
+            // Act
+            user, err := service.GetUser(tt.userID)
+
+            // Assert
+            if tt.hasError {
+                assert.Error(t, err)
+                assert.Contains(t, err.Error(), tt.expectedError)
+                assert.Nil(t, user)
+            } else {
+                assert.NoError(t, err)
+                assert.Equal(t, tt.expectedUser, user)
+            }
+
+            mockRepo.AssertExpectations(t)
+        })
+    }
+}
+```
+
+#### AAA Guidelines and Rules
+
+**✅ DO:**
+
+- Always use explicit `// Arrange`, `// Act`, `// Assert` comments
+- Keep each section focused on its single responsibility
+- Minimize the Act section to a single method call when possible
+- Group related setup operations in the Arrange section
+- Place all verifications in the Assert section
+
+**❌ DON'T:**
+
+- Mix arrangement and action in the same section
+- Perform multiple actions in the Act section
+- Skip any of the three sections (even if minimal)
+- Put assertions before the action is complete
+
+#### Complex AAA Example
+
+```go
+func TestOrderProcessor_ProcessOrder(t *testing.T) {
+    tests := []struct {
+        name              string
+        order             *Order
+        inventoryResponse bool
+        paymentError      error
+        shouldCallPayment bool
+        expectedStatus    OrderStatus
+        expectedError     error
+    }{
+        {
+            name:              "when order is valid and inventory available and payment succeeds it should process order successfully and no error",
+            order:             &Order{ID: 1, Items: []Item{{ID: 1, Quantity: 2}}},
+            inventoryResponse: true,
+            paymentError:      nil,
+            shouldCallPayment: true,
+            expectedStatus:    StatusProcessed,
+            expectedError:     nil,
+        },
+    }
+
+    for _, tt := range tests {
+        t.Run(tt.name, func(t *testing.T) {
+            // Arrange
+            mockInventory := new(MockInventoryService)
+            mockPayment := new(MockPaymentService)
+            mockInventory.On("CheckAvailability", mock.Anything).Return(tt.inventoryResponse, nil)
+
+            if tt.shouldCallPayment {
+                mockPayment.On("ProcessPayment", mock.Anything).Return(tt.paymentError)
+            }
+
+            processor := NewOrderProcessor(mockInventory, mockPayment)
+
+            // Act
+            result, err := processor.ProcessOrder(tt.order)
+
+            // Assert
+            if tt.expectedError != nil {
+                assert.Error(t, err)
+                assert.Equal(t, tt.expectedError.Error(), err.Error())
+                assert.Nil(t, result)
+            } else {
+                assert.NoError(t, err)
+                assert.NotNil(t, result)
+                assert.Equal(t, tt.expectedStatus, result.Status)
+            }
+
+            mockInventory.AssertExpectations(t)
+            if tt.shouldCallPayment {
+                mockPayment.AssertExpectations(t)
+            }
+        })
+    }
+}
+```
+
+### 5. Assertions
+
+#### Basic Assertions
+
+```go
+func TestAssertions(t *testing.T) {
+    // Equality
+    assert.Equal(t, "expected", "actual")
+    assert.NotEqual(t, "not expected", "actual")
+
+    // Numeric comparisons
+    assert.Greater(t, 10, 5)
+    assert.GreaterOrEqual(t, 10, 10)
+    assert.Less(t, 5, 10)
+    assert.LessOrEqual(t, 5, 5)
+
+    // Boolean assertions
+    assert.True(t, true)
+    assert.False(t, false)
+
+    // Nil assertions
+    assert.Nil(t, nil)
+    assert.NotNil(t, "not nil")
+
+    // Empty/Zero assertions
+    assert.Empty(t, "")
+    assert.NotEmpty(t, "not empty")
+    assert.Zero(t, 0)
+    assert.NotZero(t, 1)
+}
+```
+
+#### Error Assertions
+
+```go
+func TestErrorAssertions(t *testing.T) {
+    // Error existence
+    err := errors.New("test error")
+    assert.Error(t, err)
+    assert.NoError(t, nil)
+
+    // Error content
+    assert.EqualError(t, err, "test error")
+    assert.Contains(t, err.Error(), "test")
+
+    // Error types
+    var customErr *CustomError
+    assert.ErrorAs(t, err, &customErr)
+    assert.ErrorIs(t, err, ErrNotFound)
+}
+```
+
+#### Collection Assertions
+
+```go
+func TestCollectionAssertions(t *testing.T) {
+    slice := []int{1, 2, 3, 4, 5}
+
+    // Length
+    assert.Len(t, slice, 5)
+    assert.NotEmpty(t, slice)
+
+    // Contains
+    assert.Contains(t, slice, 3)
+    assert.NotContains(t, slice, 10)
+
+    // Subset
+    assert.Subset(t, slice, []int{1, 3, 5})
+
+    // Element-wise comparison
+    expected := []int{1, 2, 3, 4, 5}
+    assert.ElementsMatch(t, expected, slice)
+
+    // Map assertions
+    m := map[string]int{"a": 1, "b": 2}
+    assert.Contains(t, m, "a")
+    assert.Equal(t, 1, m["a"])
+
+    // Type assertions
+    var i interface{} = "hello"
+    assert.IsType(t, "hello", i)
+}
+```
+
+#### Custom Assertions with Messages
+
+```go
+func TestCustomMessages(t *testing.T) {
+    user := User{ID: 0, Name: ""}
+
+    assert.True(t, user.IsValid(),
+        "User should be valid with ID=%d and Name=%s", user.ID, user.Name)
+
+    // Using require for critical assertions
+    require.NotNil(t, user, "User must not be nil to continue test")
+    assert.Equal(t, "John", user.Name, "User name mismatch")
+}
+```
+
+**[↑ Back to Top](#go-testing-guidelines-with-testify)**
+
+---
+
+## Part II: Advanced Patterns
+
+### 7. Advanced Table-Driven Testing Patterns
+
+**Note: The previous section showed the standard table-driven approach. This section covers advanced patterns for complex scenarios.**
+
+#### Complex Domain Logic Testing
+
+```go
+func TestUserValidation_TableDriven(t *testing.T) {
+    tests := []struct {
+        name          string
+        user          User
+        expectedValid bool
+        expectedError error
+    }{
+        {
+            name:          "when user has all required fields it should pass validation and no error",
+            user:          User{ID: 1, Name: "John", Email: "john@example.com"},
+            expectedValid: true,
+            expectedError: nil,
+        },
+        {
+            name:          "when user name is missing it should fail validation and return error",
+            user:          User{ID: 1, Name: "", Email: "john@example.com"},
+            expectedValid: false,
+            expectedError: errors.New("name is required"),
+        },
+        {
+            name:          "when email format is invalid it should fail validation and return error",
+            user:          User{ID: 1, Name: "John", Email: "invalid-email"},
+            expectedValid: false,
+            expectedError: errors.New("invalid email format"),
+        },
+        {
+            name:          "when ID is zero it should fail validation and return error",
+            user:          User{ID: 0, Name: "John", Email: "john@example.com"},
+            expectedValid: false,
+            expectedError: errors.New("ID must be positive"),
+        },
+    }
+
+    for _, tt := range tests {
+        t.Run(tt.name, func(t *testing.T) {
+            // Arrange
+            // (Test data already prepared in struct)
+
+            // Act
+            err := tt.user.Validate()
+
+            // Assert
+            if tt.expectedError != nil {
+                assert.Error(t, err)
+                assert.Equal(t, tt.expectedError.Error(), err.Error())
+            } else {
+                assert.NoError(t, err)
+            }
+        })
+    }
+}
+```
+
+#### Parameterized Tests with Helper Functions
+
+```go
+func TestCalculateDiscount_TableDriven(t *testing.T) {
+    tests := []struct {
+        name           string
+        amount         float64
+        discount       float64
+        expectedResult float64
+        expectedError  error
+    }{
+        {
+            name:           "when given valid parameters it should apply standard discount correctly and no error",
+            amount:         100.0,
+            discount:       0.1,
+            expectedResult: 90.0,
+            expectedError:  nil,
+        },
+        {
+            name:           "when no discount is applied it should return original amount and no error",
+            amount:         100.0,
+            discount:       0.0,
+            expectedResult: 100.0,
+            expectedError:  nil,
+        },
+        {
+            name:           "when full discount is applied it should return zero and no error",
+            amount:         100.0,
+            discount:       1.0,
+            expectedResult: 0.0,
+            expectedError:  nil,
+        },
+        {
+            name:          "when discount exceeds maximum allowed value it should return error",
+            amount:        100.0,
+            discount:      1.5,
+            expectedResult: 0.0,
+            expectedError: errors.New("discount cannot be greater than 1.0"),
+        },
+        {
+            name:          "when amount is negative it should return error",
+            amount:        -100.0,
+            discount:      0.1,
+            expectedResult: 0.0,
+            expectedError: errors.New("amount cannot be negative"),
+        },
+    }
+
+    for _, tt := range tests {
+        t.Run(tt.name, func(t *testing.T) {
+            // Arrange
+            // (Test parameters already set up in test struct)
+
+            // Act
+            result, err := CalculateDiscount(tt.amount, tt.discount)
+
+            // Assert
+            if tt.expectedError != nil {
+                assert.Error(t, err)
+                assert.Equal(t, tt.expectedError.Error(), err.Error())
+                assert.Equal(t, tt.expectedResult, result)
+            } else {
+                assert.NoError(t, err)
+                assert.Equal(t, tt.expectedResult, result)
+            }
+        })
+    }
+}
+```
+
+### 8. Test Suites
+
+#### Basic Test Suite
+
+```go
+// Define the suite struct
+type UserServiceSuite struct {
+    suite.Suite
+    service *UserService
+    db      *sql.DB
+}
+
+// Setup before the entire suite
+func (s *UserServiceSuite) SetupSuite() {
+    // Initialize database connection
+    db, err := sql.Open("sqlite3", ":memory:")
+    s.Require().NoError(err)
+    s.db = db
+
+    // Create tables
+    s.createTables()
+}
+
+// Setup before each test
+func (s *UserServiceSuite) SetupTest() {
+    s.service = NewUserService(s.db)
+    s.cleanDatabase()
+}
+
+// Cleanup after each test
+func (s *UserServiceSuite) TearDownTest() {
+    s.cleanDatabase()
+}
+
+// Cleanup after the entire suite
+func (s *UserServiceSuite) TearDownSuite() {
+    s.db.Close()
+}
+
+// Test methods
+func (s *UserServiceSuite) TestCreateUser_Success() {
+    // Arrange
+    user := &User{Name: "John", Email: "john@example.com"}
+
+    // Act
+    createdUser, err := s.service.CreateUser(user)
+
+    // Assert
+    s.NoError(err)
+    s.NotZero(createdUser.ID)
+    s.Equal("John", createdUser.Name)
+}
+
+func (s *UserServiceSuite) TestCreateUser_DuplicateEmail() {
+    // Arrange
+    user1 := &User{Name: "John", Email: "john@example.com"}
+    user2 := &User{Name: "Jane", Email: "john@example.com"}
+
+    // Act
+    _, err1 := s.service.CreateUser(user1)
+    _, err2 := s.service.CreateUser(user2)
+
+    // Assert
+    s.NoError(err1)
+    s.Error(err2)
+    s.Contains(err2.Error(), "email already exists")
+}
+
+// Helper methods
+func (s *UserServiceSuite) createTables() {
+    query := `CREATE TABLE users (
+        id INTEGER PRIMARY KEY,
+        name TEXT NOT NULL,
+        email TEXT UNIQUE NOT NULL
+    )`
+    _, err := s.db.Exec(query)
+    s.Require().NoError(err)
+}
+
+func (s *UserServiceSuite) cleanDatabase() {
+    _, err := s.db.Exec("DELETE FROM users")
+    s.Require().NoError(err)
+}
+
+// Run the suite
+func TestUserServiceSuite(t *testing.T) {
+    suite.Run(t, new(UserServiceSuite))
+}
+```
+
+#### Suite with Parallel Tests
+
+```go
+type ParallelSuite struct {
+    suite.Suite
+}
+
+func (s *ParallelSuite) SetupTest() {
+    // This will run for each test
+}
+
+func (s *ParallelSuite) TestParallelOperation1() {
+    s.T().Parallel()
+
+    // Arrange
+    // (No additional setup needed)
+
+    // Act
+    result := SomeExpensiveOperation()
+
+    // Assert
+    s.Equal("expected", result)
+}
+
+func (s *ParallelSuite) TestParallelOperation2() {
+    s.T().Parallel()
+
+    // Arrange
+    // (No additional setup needed)
+
+    // Act
+    result := AnotherExpensiveOperation()
+
+    // Assert
+    s.NotEmpty(result)
+}
+
+func TestParallelSuite(t *testing.T) {
+    suite.Run(t, new(ParallelSuite))
+}
+```
+
+**[↑ Back to Top](#go-testing-guidelines-with-testify)**
+
+### 9. Mocking with Testify (Table-Driven Pattern)
+
+**Important**: All mock-based tests must follow the table-driven pattern with parameterized mock responses. Never use function-based mock setup - always parameterize mock behavior in the test struct.
+
+#### Mock File Organization
+
+**Important**: All mock implementations must be placed in dedicated files with the `_mock.go` suffix. Just as test files use `_test.go`, mocks use `_mock.go` for clear separation and organization.
+
+```go
+// user_repository_mock.go
+package user
+
+import "github.com/stretchr/testify/mock"
+
+// MockUserRepository is a mock implementation of UserRepository
+type MockUserRepository struct {
+    mock.Mock
+}
+
+func (m *MockUserRepository) GetUser(id int) (*User, error) {
+    args := m.Called(id)
+    return args.Get(0).(*User), args.Error(1)
+}
+
+func (m *MockUserRepository) CreateUser(user *User) error {
+    args := m.Called(user)
+    return args.Error(0)
+}
+
+func (m *MockUserRepository) UpdateUser(user *User) error {
+    args := m.Called(user)
+    return args.Error(0)
+}
+```
+
+#### Basic Mock Setup
+
+````go
+// Define an interface (in main source file)
+type UserRepository interface {
+    GetUser(id int) (*User, error)
+    CreateUser(user *User) error
+    UpdateUser(user *User) error
+}
+
+#### Mock Parameterization Principles
+
+**Key Rules for Mock Testing:**
+
+1. **Always create mocks in the test loop**: `mockRepo := new(MockUserRepository)` goes inside the `t.Run()` function
+2. **Parameterize mock responses**: Use `mockResponse error` fields in test struct, not function closures
+3. **Conditional mock setup**: Use `shouldCallMock bool` to handle cases where mock shouldn't be called
+4. **Standard mock pattern**: Always use `mockRepo.On("Method", args).Return(tt.mockResponse)`
+
+```go
+// ✅ CORRECT Pattern
+tests := []struct {
+    name           string
+    input          InputType
+    shouldCallMock bool
+    mockResponse   error
+    expectedError  string
+    hasError       bool
+}{
+    {
+        name:           "success case",
+        input:          validInput,
+        shouldCallMock: true,
+        mockResponse:   nil,
+        expectedError:  nil,
+    },
+    {
+        name:           "validation error",
+        input:          invalidInput,
+        shouldCallMock: false, // Validation fails before mock call
+        expectedError:  errors.New("validation failed"),
+    },
+}
+
+// In test loop:
+mockRepo := new(MockUserRepository)
+if tt.shouldCallMock {
+    mockRepo.On("Method", mock.AnythingOfType("*Type")).Return(tt.mockResponse)
+}
+````
+
+#### Using Mocks in Tests
+
+```go
+func TestUserService_GetUser(t *testing.T) {
+    tests := []struct {
+        name           string
+        userID         int
+        mockUser       *User
+        mockError      error
+        expectedUser   *User
+        expectedError  error
+    }{
+        {
+            name:         "when repository finds existing user it should return user object and no error",
+            userID:       1,
+            mockUser:     &User{ID: 1, Name: "John"},
+            mockError:    nil,
+            expectedUser: &User{ID: 1, Name: "John"},
+            expectedError: nil,
+        },
+        {
+            name:          "when user does not exist in repository it should return error",
+            userID:        999,
+            mockUser:      nil,
+            mockError:     errors.New("user not found"),
+            expectedUser:  nil,
+            expectedError: errors.New("user not found"),
+        },
+        {
+            name:          "when repository connection fails it should return error",
+            userID:        1,
+            mockUser:      nil,
+            mockError:     errors.New("connection failed"),
+            expectedUser:  nil,
+            expectedError: errors.New("connection failed"),
+        },
+    }
+
+    for _, tt := range tests {
+        t.Run(tt.name, func(t *testing.T) {
+            // Arrange
+            mockRepo := new(MockUserRepository)
+            mockRepo.On("GetUser", tt.userID).Return(tt.mockUser, tt.mockError)
+            service := NewUserService(mockRepo)
+
+            // Act
+            user, err := service.GetUser(tt.userID)
+
+            // Assert
+            if tt.expectedError != nil {
+                assert.Error(t, err)
+                assert.Equal(t, tt.expectedError.Error(), err.Error())
+                assert.Nil(t, user)
+            } else {
+                assert.NoError(t, err)
+                assert.Equal(t, tt.expectedUser, user)
+            }
+
+            mockRepo.AssertExpectations(t)
+        })
+    }
+}
+```
+
+#### Advanced Mock Scenarios
+
+```go
+func TestUserService_UpdateUser(t *testing.T) {
+    tests := []struct {
+        name          string
+        user          *User
+        mockResponse  error
+        expectedError error
+    }{
+        {
+            name:         "when repository operation succeeds it should update user successfully and no error",
+            user:         &User{ID: 1, Name: "Updated Name", Email: "updated@example.com"},
+            mockResponse: nil,
+            expectedError: nil,
+        },
+        {
+            name:          "when attempting to update non-existent user it should return error",
+            user:          &User{ID: 999, Name: "Non-existent User"},
+            mockResponse:  errors.New("user not found"),
+            expectedError: errors.New("user not found"),
+        },
+        {
+            name:          "when repository operation fails it should return error",
+            user:          &User{ID: 1, Name: "Valid User"},
+            mockResponse:  errors.New("database connection failed"),
+            expectedError: errors.New("database connection failed"),
+        },
+    }
+
+    for _, tt := range tests {
+        t.Run(tt.name, func(t *testing.T) {
+            // Arrange
+            mockRepo := new(MockUserRepository)
+            mockRepo.On("UpdateUser", mock.AnythingOfType("*User")).Return(tt.mockResponse)
+            service := NewUserService(mockRepo)
+
+            // Act
+            err := service.UpdateUser(tt.user)
+
+            // Assert
+            if tt.expectedError != nil {
+                assert.Error(t, err)
+                assert.Equal(t, tt.expectedError.Error(), err.Error())
+            } else {
+                assert.NoError(t, err)
+            }
+
+            mockRepo.AssertExpectations(t)
+        })
+    }
+}
+```
+
+### 6. BDD-Style Test Names (Behavior-Driven Development)
+
+**Always use descriptive, behavior-focused names that follow BDD patterns:**
+
+```go
+// ✅ EXCELLENT: BDD-style names that describe behavior
+name: "when valid data is provided it should create user successfully and no error"
+name: "when email already exists in repository it should return error"
+name: "when user name is empty it should return validation error"
+name: "when adding positive numbers it should return the correct sum and no error"
+name: "when attempting division by zero it should return an error"
+
+// ✅ ALTERNATIVE: Should-when pattern
+name: "should create user successfully and no error when valid data is provided"
+name: "should return error when email already exists in repository"
+name: "should return validation error when user name is empty"
+
+// ✅ ADVANCED: Given-when-then pattern for complex scenarios
+name: "given valid user data, when creating user, then should return success and no error"
+name: "given duplicate email, when creating user, then should return conflict error"
+
+// ❌ BAD: Vague, non-descriptive names
+name: "valid user creation"
+name: "duplicate email error"
+name: "positive numbers"
+name: "test case 1"
+
+// ❌ BAD: Technical implementation details instead of behavior
+name: "mock returns nil"
+name: "database query succeeds"
+```
+
+**BDD Naming Patterns (in order of preference):**
+
+1. **Primary**: `"when [condition/action] it should [expected behavior]"`
+2. **Alternative**: `"should [expected behavior] when [condition]"`
+3. **Complex**: `"given [context], when [action], then [expected outcome]"`
+
+**Key Principles:**
+
+- Start with the **scenario/condition** first, then describe the **expected behavior**
+- Always describe the **behavior** and **business logic**, not technical implementation
+- Focus on **what** the system should do from a user/business perspective
+- Use natural language that stakeholders can understand
+
+#### Comprehensive BDD Test Naming Theory
+
+**BDD test names must form complete sentences that describe the entire behavior specification.**
+
+##### Scenario Keywords (Condition Description)
+
+**Primary Scenario Starters:**
+
+- `"when [condition]"` - Most common, describes the trigger condition
+- `"given [context]"` - Sets up the initial state/context
+- `"if [condition]"` - Alternative to "when" for conditional scenarios
+
+**Scenario Connectors (for complex conditions):**
+
+- `"and [additional condition]"` - Adds multiple conditions
+- `"but [contrasting condition]"` - Contrasts with expected condition
+- `"with [parameter/state]"` - Describes specific parameters or state
+- `"having [possession/attribute]"` - Describes what the entity has
+- `"containing [content]"` - Describes internal content
+- `"while [concurrent condition]"` - Describes simultaneous conditions
+
+**Scenario Examples:**
+
+```go
+// Simple conditions
+"when user provides valid email"
+"when database connection fails"
+"when input exceeds maximum limit"
+
+// Complex conditions with connectors
+"when user provides valid email and password but account is locked"
+"when dividing positive numbers and result has decimal places"
+"when user exists in database but has expired subscription"
+"given user with admin privileges and active session"
+"when processing payment with insufficient funds and retry limit exceeded"
+```
+
+##### Expected Behavior Keywords (Should Description)
+
+**Primary Behavior Indicators:**
+
+- `"it should [expected action]"` - Most common pattern
+- `"then it should [expected action]"` - Alternative with explicit "then"
+- `"should [expected action]"` - Direct expectation
+
+**Expected Action Verbs:**
+
+- **Success Actions:** `return`, `create`, `update`, `delete`, `save`, `send`, `calculate`, `generate`, `validate`, `authenticate`, `authorize`
+- **Error Actions:** `return error`, `fail`, `reject`, `deny`, `throw exception`, `abort`, `cancel`
+- **State Actions:** `change state to`, `remain unchanged`, `reset`, `initialize`, `clear`, `persist`
+
+**Response Completeness Keywords:**
+
+- `"and no error"` - Explicitly states success case
+- `"with error message"` - Indicates error case with message
+- `"and return error"` - Combines success action with error
+- `"including [additional response]"` - Describes additional response elements
+- `"along with [accompanying data]"` - Describes accompanying data
+- `"containing [specific content]"` - Describes response content
+
+##### Complete Response Description Patterns
+
+**Success Response Patterns:**
+
+```go
+// Simple success - action + result + no error
+"when adding positive numbers it should return the correct sum and no error"
+
+// Complex success - action + result + additional data + no error
+"when creating user with valid data it should return user ID and creation timestamp and no error"
+
+// State change success
+"when activating user account it should change status to active and send confirmation email and no error"
+```
+
+**Error Response Patterns:**
+
+```go
+// Simple error - action + error type + error message
+"when dividing by zero it should return zero value and error with message containing 'division by zero'"
+
+// Complex error - action + partial result + error + error details
+"when creating user with duplicate email it should return empty user object and validation error with message containing 'email already exists'"
+
+// Multiple error conditions
+"when input exceeds limit it should return default value and error with code 'INVALID_INPUT' and message describing the violation"
+```
+
+**Mixed Response Patterns (Success with Warnings):**
+
+```go
+"when importing data with some invalid records it should return processed count and warning list and no error"
+"when user login succeeds but password expires soon it should return auth token and warning message and no error"
+```
+
+##### Complete BDD Test Name Template
+
+```
+"when [primary condition] [and/but/with additional conditions] it should [expected action] [result description] [and error status] [with additional response details]"
+```
+
+**Template Examples:**
+
+```go
+// Template: when [condition] it should [action] [result] and [error_status]
+name: "when user provides valid credentials it should return authentication token and no error"
+
+// Template: when [condition] and [additional condition] it should [action] [result] and [error] with [error details]
+name: "when user provides invalid email and password is empty it should return authentication failure and error with message containing 'invalid credentials'"
+
+// Template: when [condition] with [parameter] it should [action] [result] and [additional data] and [error status]
+name: "when calculating discount with valid percentage it should return discounted amount and original price and no error"
+
+// Template: when [condition] but [contrasting condition] it should [action] [partial result] and [error] with [specific message]
+name: "when user exists in database but account is deactivated it should return empty user object and authorization error with message 'account disabled'"
+```
+
+##### Error Description Specificity
+
+**Error descriptions must include:**
+
+- **Error Type:** `validation error`, `authentication error`, `authorization error`, `database error`, `network error`, `business logic error`
+- **Error Content:** `with message containing 'specific text'`, `with error code 'ERROR_CODE'`, `with field validation details`
+- **Error Behavior:** `and return zero value`, `and return empty object`, `and return nil`, `and return default state`
+
+**Complete Error Examples:**
+
+```go
+name: "when email format is invalid it should return empty user and validation error with message containing 'invalid email format'"
+
+name: "when database connection fails it should return nil result and database error with message containing 'connection timeout'"
+
+name: "when user lacks permissions it should return empty response and authorization error with code 'FORBIDDEN' and message describing required permissions"
+```
+
+##### Multi-Variable Response Descriptions
+
+**When functions return multiple values, describe each:**
+
+```go
+// Function: CreateUser(user) (*User, *AuditLog, error)
+name: "when creating user with valid data it should return populated user object and audit log entry and no error"
+
+name: "when creating user with duplicate email it should return nil user and nil audit log and validation error with message containing 'email exists'"
+
+// Function: ProcessPayment(amount) (*Receipt, *Transaction, []Warning, error)
+name: "when processing valid payment it should return receipt with transaction ID and transaction record with timestamp and empty warnings and no error"
+
+name: "when processing payment with insufficient funds it should return nil receipt and nil transaction and empty warnings and payment error with message containing 'insufficient balance'"
+```
+
+##### State Change Descriptions
+
+**When testing state changes, describe before and after:**
+
+```go
+name: "when activating suspended user account it should change status from suspended to active and update last modified timestamp and no error"
+
+name: "when deleting existing record it should remove record from database and update parent record count and no error"
+
+name: "when user login fails three times it should change account status to locked and record failed attempts and no error"
+```
+
+##### BDD Test Naming Checklist
+
+**Every test name must answer these questions:**
+
+- ✅ **What triggers the behavior?** (when/given clause)
+- ✅ **What should the system do?** (action verb)
+- ✅ **What should be returned/changed?** (result description)
+- ✅ **Should there be an error?** (and no error / and error with...)
+- ✅ **What additional side effects occur?** (state changes, notifications, etc.)
+
+**Complete Test Name Formula:**
+
+```
+[TRIGGER] + [ACTION] + [RESULT] + [ERROR_STATUS] + [SIDE_EFFECTS]
+
+Examples:
+"when [condition] it should [action] [result] and [error_status]"
+"when [condition] and [additional_condition] it should [action] [result1] and [result2] and [error_status] with [error_details]"
+```
+
+**Quality Test Name Examples:**
+
+```go
+// ✅ EXCELLENT - Complete specification
+name: "when user provides valid credentials and account is active it should return authentication token and user profile and no error"
+
+name: "when creating user with duplicate email it should return empty user object and validation error with message containing 'email already exists'"
+
+name: "when processing payment with insufficient funds it should return nil receipt and payment error with code 'INSUFFICIENT_FUNDS' and message describing required amount"
+
+// ❌ INCOMPLETE - Missing error status
+name: "when user provides valid credentials it should return authentication token and no error"
+
+// ❌ INCOMPLETE - Missing result description
+name: "when creating user with valid data it should succeed and no error"
+
+// ❌ INCOMPLETE - Missing specific error details
+name: "when email is invalid it should return error"
+```
+
+**[↑ Back to Top](#go-testing-guidelines-with-testify)**
+
+### 10. Test Organization
+
+#### File Structure
+
+```
+project/
+├── internal/
+│   ├── user/
+│   │   ├── user.go
+│   │   ├── user_test.go
+│   │   ├── user_mock.go                    # Mock implementations
+│   │   ├── repository.go
+│   │   ├── repository_test.go
+│   │   ├── repository_mock.go              # Repository mocks
+│   │   ├── service.go
+│   │   └── service_test.go
+│   └── auth/
+│       ├── auth.go
+│       ├── auth_test.go
+│       └── auth_mock.go                    # Auth service mocks
+├── pkg/
+│   └── utils/
+│       ├── validator.go
+│       ├── validator_test.go
+│       └── validator_mock.go               # Utility mocks
+└── testdata/
+    ├── users.json
+    └── config.yaml
+```
+
+#### Mock File Naming Conventions
+
+**All mock files must follow the `_mock.go` suffix pattern:**
+
+- ✅ `user_repository_mock.go` - Clear interface identification
+- ✅ `payment_service_mock.go` - Service mock
+- ✅ `database_client_mock.go` - Client mock
+- ✅ `user_mock.go` - Simple entity mock
+
+**Benefits of dedicated mock files:**
+
+- **🔍 Clear Separation**: Mocks are visually separated from production and test code
+- **📁 Organization**: Easy to locate and maintain mock implementations
+- **🔧 Reusability**: Mocks can be shared across multiple test files
+- **📚 Documentation**: Mock files serve as interface documentation
+- **🏗️ Build Isolation**: Can be excluded from production builds if needed
+
+#### Test Utilities and Helpers
+
+```go
+// testutil/helpers.go
+package testutil
+
+import (
+    "encoding/json"
+    "io/ioutil"
+    "testing"
+    "github.com/stretchr/testify/require"
+)
+
+// LoadTestData loads test data from JSON file
+func LoadTestData(t *testing.T, filename string, v interface{}) {
+    data, err := ioutil.ReadFile(filename)
+    require.NoError(t, err, "Failed to read test data file")
+
+    err = json.Unmarshal(data, v)
+    require.NoError(t, err, "Failed to unmarshal test data")
+}
+
+// AssertUser helper for user assertions
+func AssertUser(t *testing.T, expected, actual *User) {
+    require.NotNil(t, actual, "User should not be nil")
+    assert.Equal(t, expected.ID, actual.ID, "User ID mismatch")
+    assert.Equal(t, expected.Name, actual.Name, "User name mismatch")
+    assert.Equal(t, expected.Email, actual.Email, "User email mismatch")
+}
+
+// CreateTestUser creates a user for testing
+func CreateTestUser(id int, name, email string) *User {
+    return &User{
+        ID:    id,
+        Name:  name,
+        Email: email,
+    }
+}
+```
+
+#### Using Test Helpers
+
+```go
+func TestUserService_GetUser_WithTestData(t *testing.T) {
+    var users []User
+    testutil.LoadTestData(t, "testdata/users.json", &users)
+
+    mockRepo := new(MockUserRepository)
+    service := NewUserService(mockRepo)
+
+    expectedUser := &users[0]
+    mockRepo.On("GetUser", expectedUser.ID).Return(expectedUser, nil)
+
+    user, err := service.GetUser(expectedUser.ID)
+
+    assert.NoError(t, err)
+    testutil.AssertUser(t, expectedUser, user)
+    mockRepo.AssertExpectations(t)
+}
+```
+
+### 11. Test Coverage
+
+#### Running Coverage
+
+```bash
+# Run tests with coverage
+go test -cover ./...
+
+# Generate detailed coverage report
+go test -coverprofile=coverage.out ./...
+go tool cover -html=coverage.out -o coverage.html
+
+# Coverage by function
+go tool cover -func=coverage.out
+```
+
+#### Coverage in CI/CD
+
+```yaml
+# .github/workflows/test.yml
+name: Test
+on: [push, pull_request]
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v2
+      - uses: actions/setup-go@v2
+        with:
+          go-version: 1.19
+      - run: go test -race -coverprofile=coverage.out ./...
+      - run: go tool cover -func=coverage.out
+      - uses: codecov/codecov-action@v1
+        with:
+          file: ./coverage.out
+```
+
+**[↑ Back to Top](#go-testing-guidelines-with-testify)**
+
+### 12. Best Practices
+
+#### 1. Always Use Table-Driven Tests with Error Cases (Primary Rule)
+
+**This is the most important principle.** Every test function should follow the comprehensive table-driven pattern:
+
+```go
+func TestUserService_CreateUser(t *testing.T) {
+    tests := []struct {
+        name             string
+        user             *User
+        shouldCallMock   bool
+        mockResponse     error
+        expectedError    error
+    }{
+        {
+            name:           "when valid data is provided it should create user successfully and no error",
+            user:           &User{Name: "John", Email: "john@example.com"},
+            shouldCallMock: true,
+            mockResponse:   nil,
+            expectedError:  nil,
+        },
+        {
+            name:           "when email already exists in repository it should return error",
+            user:           &User{Name: "John", Email: "existing@example.com"},
+            shouldCallMock: true,
+            mockResponse:   errors.New("email already exists"),
+            expectedError:  errors.New("email already exists"),
+        },
+        {
+            name:           "when repository connection fails it should return error",
+            user:           &User{Name: "John", Email: "john@example.com"},
+            shouldCallMock: true,
+            mockResponse:   errors.New("connection failed"),
+            expectedError:  errors.New("connection failed"),
+        },
+        {
+            name:           "when user name is empty it should return validation error",
+            user:           &User{Name: "", Email: "john@example.com"},
+            shouldCallMock: false, // Validation fails before mock is called
+            expectedError:  errors.New("name cannot be empty"),
+        },
+    }
+
+    for _, tt := range tests {
+        t.Run(tt.name, func(t *testing.T) {
+            // Arrange
+            mockRepo := new(MockUserRepository)
+
+            // Setup mock only if the test should reach the repository call
+            if tt.shouldCallMock {
+                mockRepo.On("CreateUser", mock.AnythingOfType("*User")).Return(tt.mockResponse)
+            }
+
+            service := NewUserService(mockRepo)
+
+            // Act
+            err := service.CreateUser(tt.user)
+
+            // Assert
+            if tt.expectedError != nil {
+                assert.Error(t, err)
+                assert.Equal(t, tt.expectedError.Error(), err.Error())
+            } else {
+                assert.NoError(t, err)
+            }
+
+            mockRepo.AssertExpectations(t)
+        })
+    }
+}
+```
+
+#### 2. Mock File Organization (Critical Rule)
+
+**All mock implementations must be in dedicated `_mock.go` files:**
+
+```go
+// user_repository_mock.go - Dedicated mock file
+package user
+
+import "github.com/stretchr/testify/mock"
+
+type MockUserRepository struct {
+    mock.Mock
+}
+
+func (m *MockUserRepository) CreateUser(user *User) error {
+    args := m.Called(user)
+    return args.Error(0)
+}
+
+func (m *MockUserRepository) GetUser(id int) (*User, error) {
+    args := m.Called(id)
+    return args.Get(0).(*User), args.Error(1)
+}
+```
+
+```go
+// user_service_test.go - Test file imports mock
+package user
+
+import (
+    "testing"
+    "github.com/stretchr/testify/assert"
+    "github.com/stretchr/testify/mock"
+)
+
+func TestUserService_CreateUser(t *testing.T) {
+    tests := []struct {
+        name           string
+        user           *User
+        mockResponse   error
+        expectedError  error
+    }{
+        // test cases...
+    }
+
+    for _, tt := range tests {
+        t.Run(tt.name, func(t *testing.T) {
+            // Arrange
+            mockRepo := new(MockUserRepository) // From user_repository_mock.go
+            mockRepo.On("CreateUser", mock.AnythingOfType("*User")).Return(tt.mockResponse)
+            service := NewUserService(mockRepo)
+
+            // Act & Assert
+            err := service.CreateUser(tt.user)
+            if tt.expectedError != nil {
+                assert.Error(t, err)
+            } else {
+                assert.NoError(t, err)
+            }
+            mockRepo.AssertExpectations(t)
+        })
+    }
+}
+```
+
+#### 3. Test Independence
+
+```go
+func TestUserService_MultipleTests(t *testing.T) {
+    t.Run("create user succeeds", func(t *testing.T) {
+        // Arrange
+        service := setupCleanUserService()
+        user := &User{Name: "John", Email: "john@example.com"}
+
+        // Act
+        err := service.CreateUser(user)
+
+        // Assert
+        assert.NoError(t, err)
+    })
+
+    t.Run("create user fails with invalid data", func(t *testing.T) {
+        // Arrange
+        service := setupCleanUserService()
+        user := &User{Name: "", Email: "invalid-email"}
+
+        // Act
+        err := service.CreateUser(user)
+
+        // Assert
+        assert.Error(t, err)
+    })
+}
+```
+
+#### 4. Test Data Management
+
+```go
+// Use test builders for complex objects
+type UserBuilder struct {
+    user *User
+}
+
+func NewUserBuilder() *UserBuilder {
+    return &UserBuilder{
+        user: &User{
+            ID:    1,
+            Name:  "Default Name",
+            Email: "default@example.com",
+        },
+    }
+}
+
+func (b *UserBuilder) WithID(id int) *UserBuilder {
+    b.user.ID = id
+    return b
+}
+
+func (b *UserBuilder) WithName(name string) *UserBuilder {
+    b.user.Name = name
+    return b
+}
+
+func (b *UserBuilder) Build() *User {
+    return b.user
+}
+
+// Usage in tests
+func TestUserService_CreateUser_WithBuilder(t *testing.T) {
+    // Arrange
+    user := NewUserBuilder().
+        WithName("John Doe").
+        WithEmail("john@example.com").
+        Build()
+    service := NewUserService()
+
+    // Act
+    err := service.CreateUser(user)
+
+    // Assert
+    assert.NoError(t, err)
+}
+```
+
+#### 5. Error Testing
+
+```go
+func TestUserService_GetUser_ErrorCases(t *testing.T) {
+    tests := []struct {
+        name          string
+        userID        int
+        mockError     error
+        expectedError error
+    }{
+        {
+            name:          "database connection error",
+            userID:        1,
+            mockError:     errors.New("connection failed"),
+            expectedError: errors.New("connection failed"),
+        },
+        {
+            name:          "user not found",
+            userID:        999,
+            mockError:     ErrUserNotFound,
+            expectedError: ErrUserNotFound,
+        },
+    }
+
+    for _, tt := range tests {
+        t.Run(tt.name, func(t *testing.T) {
+            // Arrange
+            mockRepo := new(MockUserRepository)
+            mockRepo.On("GetUser", tt.userID).Return((*User)(nil), tt.mockError)
+            service := NewUserService(mockRepo)
+
+            // Act
+            user, err := service.GetUser(tt.userID)
+
+            // Assert
+            assert.Error(t, err)
+            assert.Nil(t, user)
+            assert.Equal(t, tt.expectedError.Error(), err.Error())
+            mockRepo.AssertExpectations(t)
+        })
+    }
+}
+```
+
+#### 6. Performance Testing Guidelines
+
+```go
+func TestUserService_GetUser_Performance(t *testing.T) {
+    if testing.Short() {
+        t.Skip("Skipping performance test in short mode")
+    }
+
+    // Arrange
+    service := setupUserService()
+
+    // Act
+    start := time.Now()
+    for i := 0; i < 1000; i++ {
+        service.GetUser(1)
+    }
+    duration := time.Since(start)
+
+    // Assert
+    assert.Less(t, duration, time.Second,
+        "1000 GetUser calls should complete within 1 second")
+}
+```
+
+---
+
+**[↑ Back to Top](#go-testing-guidelines-with-testify)**
+
+## Glossary
+
+#### Testing Terminology
+
+**AAA (Arrange-Act-Assert)**: A testing pattern that structures tests into three distinct phases: setup (Arrange), execution (Act), and verification (Assert).
+
+**Assertion**: A statement that verifies expected behavior or state. In testify, assertions are functions like `assert.Equal()` or `assert.NoError()`.
+
+**BDD (Behavior-Driven Development)**: A development approach that emphasizes describing software behavior in business-readable language. In testing, this translates to descriptive test names like "when user provides valid data it should create user successfully".
+
+**Mock**: A test double that simulates the behavior of real dependencies with predetermined responses. Used to isolate the unit under test.
+
+**Table-Driven Test**: A Go testing pattern where test cases are defined as data structures (slices of structs) and executed in loops, enabling comprehensive scenario coverage.
+
+**Test Double**: Generic term for any replacement object used in testing (mocks, stubs, fakes, spies).
+
+**Test Suite**: A collection of related tests that share common setup and teardown logic, typically using testify's suite package.
+
+#### Go Testing Concepts
+
+**`t.Run()`**: Go's subtest functionality that allows running multiple test scenarios within a single test function.
+
+**`testing.T`**: Go's testing context object that provides test state and helper methods.
+
+**`_test.go`**: Go's naming convention for test files. Only files ending in `_test.go` are compiled during testing.
+
+**`_mock.go`**:
+
+#### Testify-Specific Terms
+
+**`assert` vs `require`**:
+
+- `assert`: Continues test execution after failure
+- `require`: Stops test execution immediately after failure
+
+**`mock.Mock`**: Testify's base struct for creating mock objects with expectation tracking.
+
+**`suite.Suite`**: Testify's base struct for creating test suites with setup/teardown lifecycle methods.
+
+**`mock.AnythingOfType()`**: Testify matcher that accepts any value of a specified type.
+
+**`AssertExpectations()`**: Method that verifies all mock expectations were met during test execution.
+
+#### Testing Patterns
+
+**Error Case Testing**: Explicitly testing failure scenarios and error conditions, not just happy path.
+
+**Parameterized Testing**: Using data-driven approaches to test multiple scenarios with the same test logic.
+
+**Test Isolation**: Ensuring tests don't depend on each other and can run in any order.
+
+**Test Independence**: Each test creates its own clean state and dependencies.
+
+---
+
+## Summary
+
+Professional Go testing with testify should **primarily** use:
+
+- **🎯 Comprehensive Table-Driven Tests with Error Cases** as the default approach for 95% of your tests
+- **Multiple test scenarios** in every test function (success, failure, edge cases)
+- **Explicit error testing** with expected error messages
+- **Descriptive test case names** that document behavior
+- **Comprehensive assertions** using testify's rich API
+
+**Secondary patterns** for specific use cases:
+
+- **Test suites** for complex setup/teardown scenarios
+- **Proper mocking** with testify/mock for dependencies
+- **Integration tests** for end-to-end validation
+- **Benchmarking** for performance verification
+
+## The Golden Rule
+
+**Every test function should test multiple scenarios using the table-driven pattern with error cases.** This approach provides:
+
+- ✅ Comprehensive coverage in a single test function
+- ✅ Easy maintenance and extension
+- ✅ Clear documentation of expected behavior
+- ✅ Explicit error handling validation
+- ✅ Reduced code duplication
+
+Remember: Tests are documentation of your code's behavior. The table-driven approach makes this documentation comprehensive and maintainable.
