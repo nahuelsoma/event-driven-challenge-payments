@@ -1,7 +1,7 @@
 package processor
 
 import (
-	"fmt"
+	"log"
 
 	"github.com/nahuelsoma/event-driven-challenge-payments/infrastructure/http"
 )
@@ -9,17 +9,17 @@ import (
 func Build(db paymentStorerDB, walletClient interface{}) (*Handler, error) {
 	ps, err := NewPaymentStorerRepository(db)
 	if err != nil {
-		return nil, fmt.Errorf("processor builder: %w", err)
+		return nil, err
 	}
 
 	wc, err := NewWalletConfirmerRepository(walletClient)
 	if err != nil {
-		return nil, fmt.Errorf("processor builder: %w", err)
+		return nil, err
 	}
 
 	wr, err := NewWalletReleaserRepository(walletClient)
 	if err != nil {
-		return nil, fmt.Errorf("processor builder: %w", err)
+		return nil, err
 	}
 
 	// Create gateway client
@@ -30,22 +30,22 @@ func Build(db paymentStorerDB, walletClient interface{}) (*Handler, error) {
 
 	gatewayClient, err := http.NewHTTPClient(gatewayConfig)
 	if err != nil {
-		return nil, fmt.Errorf("processor builder: %w", err)
+		log.Fatalf("api: failed to create HTTP client: %v", err)
 	}
 
 	gp, err := NewGatewayProcessorRepository(gatewayClient)
 	if err != nil {
-		return nil, fmt.Errorf("processor builder: %w", err)
+		return nil, err
 	}
 
 	pps, err := NewPaymentProcessorService(ps, ps, wc, wr, gp)
 	if err != nil {
-		return nil, fmt.Errorf("processor builder: %w", err)
+		return nil, err
 	}
 
 	h, err := NewHandler(pps)
 	if err != nil {
-		return nil, fmt.Errorf("processor builder: %w", err)
+		return nil, err
 	}
 
 	return h, nil

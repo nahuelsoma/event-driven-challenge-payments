@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log/slog"
 	"time"
 
 	"github.com/google/uuid"
@@ -37,6 +38,8 @@ func NewPaymentStorerRepository(db paymentStorerDB) (*PaymentStorerRepository, e
 
 // GetByID retrieves a payment by ID
 func (r *PaymentStorerRepository) GetByID(ctx context.Context, paymentID string) (*domain.Payment, error) {
+	slog.DebugContext(ctx, "[DEBUG] PaymentStorerRepository.GetByID called", "payment_id", paymentID)
+
 	query := `
 		SELECT id, idempotency_key, user_id, amount, currency, status, created_at, updated_at
 		FROM payments
@@ -60,7 +63,7 @@ func (r *PaymentStorerRepository) GetByID(ctx context.Context, paymentID string)
 	}
 
 	if err != nil {
-		return nil, fmt.Errorf("payment storer: get by id: %w", err)
+		return nil, fmt.Errorf("failed to get payment by id: %w", err)
 	}
 
 	return &payment, nil
@@ -68,6 +71,8 @@ func (r *PaymentStorerRepository) GetByID(ctx context.Context, paymentID string)
 
 // UpdateStatus updates the payment status with optional gateway reference
 func (r *PaymentStorerRepository) UpdateStatus(ctx context.Context, paymentID string, status domain.Status, gatewayRef string) error {
+	slog.DebugContext(ctx, "[DEBUG] PaymentStorerRepository.UpdateStatus called", "payment_id", paymentID, "status", status, "gateway_ref", gatewayRef)
+
 	// Build event payload
 	payload, err := json.Marshal(map[string]interface{}{
 		"payment_id":  paymentID,
@@ -75,7 +80,7 @@ func (r *PaymentStorerRepository) UpdateStatus(ctx context.Context, paymentID st
 		"gateway_ref": gatewayRef,
 	})
 	if err != nil {
-		return fmt.Errorf("payment storer: marshal payload: %w", err)
+		return fmt.Errorf("failed to marshal event payload: %w", err)
 	}
 
 	now := time.Now()
@@ -90,7 +95,7 @@ func (r *PaymentStorerRepository) UpdateStatus(ctx context.Context, paymentID st
 		`
 		err := tx.QueryRowContext(ctx, sequenceQuery, paymentID).Scan(&nextSequence)
 		if err != nil {
-			return fmt.Errorf("get sequence: %w", err)
+			return fmt.Errorf("failed to get next sequence: %w", err)
 		}
 
 		// Insert into Event Store
@@ -107,7 +112,7 @@ func (r *PaymentStorerRepository) UpdateStatus(ctx context.Context, paymentID st
 			now,
 		)
 		if err != nil {
-			return fmt.Errorf("insert event: %w", err)
+			return fmt.Errorf("failed to insert payment event: %w", err)
 		}
 
 		// Update Read Model
@@ -118,12 +123,12 @@ func (r *PaymentStorerRepository) UpdateStatus(ctx context.Context, paymentID st
 		`
 		result, err := tx.ExecContext(ctx, updateQuery, status, gatewayRef, now, paymentID)
 		if err != nil {
-			return fmt.Errorf("update status: %w", err)
+			return fmt.Errorf("failed to update payment status: %w", err)
 		}
 
 		rowsAffected, err := result.RowsAffected()
 		if err != nil {
-			return fmt.Errorf("rows affected: %w", err)
+			return fmt.Errorf("failed to get rows affected: %w", err)
 		}
 
 		if rowsAffected == 0 {
@@ -134,7 +139,7 @@ func (r *PaymentStorerRepository) UpdateStatus(ctx context.Context, paymentID st
 	})
 
 	if err != nil {
-		return fmt.Errorf("payment storer: update status: %w", err)
+		return fmt.Errorf("failed to update payment status: %w", err)
 	}
 
 	return nil

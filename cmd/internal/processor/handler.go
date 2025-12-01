@@ -3,7 +3,7 @@ package processor
 import (
 	"context"
 	"errors"
-	"fmt"
+	"log/slog"
 
 	"github.com/nahuelsoma/event-driven-challenge-payments/cmd/internal/shared/domain"
 )
@@ -34,21 +34,29 @@ func NewHandler(pp PaymentProcessor) (*Handler, error) {
 func (h *Handler) HandleMessage(body []byte) error {
 	ctx := context.Background()
 
+	slog.InfoContext(ctx, "Processing payment message", "body", string(body))
+
 	// Parse message
 	var payment domain.Payment
 	if err := payment.Parse(body); err != nil {
-		return fmt.Errorf("processor handler: failed to parse payment message: %w", err)
+		slog.ErrorContext(ctx, "Failed to parse payment message", "error", err)
+		return err
 	}
 
 	// Validate message
 	if err := payment.Validate(); err != nil {
-		return fmt.Errorf("processor handler: invalid payment message: %w", err)
+		slog.WarnContext(ctx, "Invalid payment message", "error", err, "payment_id", payment.ID)
+		return err
 	}
+
+	slog.InfoContext(ctx, "Processing payment", "payment_id", payment.ID, "user_id", payment.UserID, "amount", payment.Amount)
 
 	// Process payment
 	if err := h.paymentProcessor.Process(ctx, &payment); err != nil {
-		return fmt.Errorf("processor handler: failed to process payment: %w", err)
+		slog.ErrorContext(ctx, "Failed to process payment", "error", err, "payment_id", payment.ID)
+		return err
 	}
 
+	slog.InfoContext(ctx, "Payment processed successfully", "payment_id", payment.ID)
 	return nil
 }

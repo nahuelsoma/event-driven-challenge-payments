@@ -85,7 +85,7 @@ func (pcs *PaymentCreatorService) Create(ctx context.Context, idempotencyKey str
 
 	payment.UpdateStatus(domain.StatusReserved)
 
-	// Step 5: Publish payment event
+	// Step 6: Publish payment event
 	if err := pcs.paymentPublisher.Publish(ctx, payment); err != nil {
 		return nil, fmt.Errorf("payment creator: publish payment: %w", err)
 	}

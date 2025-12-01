@@ -81,7 +81,7 @@ func (pps *PaymentProcessorService) Process(ctx context.Context, payment *domain
 	// Step 1: Check payment status for idempotency
 	existing, err := pps.paymentReader.GetByID(ctx, payment.ID)
 	if err != nil {
-		return fmt.Errorf("payment processor: get payment: %w", err)
+		return fmt.Errorf("payment processor: failed to get payment: %w", err)
 	}
 
 	// Skip if already processed (idempotency)
@@ -99,11 +99,11 @@ func (pps *PaymentProcessorService) Process(ctx context.Context, payment *domain
 	if err != nil {
 		// Gateway failed → Release funds and mark as failed
 		if releaseErr := pps.walletReleaser.Release(ctx, payment.UserID, payment.Amount, payment.ID); releaseErr != nil {
-			return fmt.Errorf("payment processor: release funds: %w", releaseErr)
+			return fmt.Errorf("payment processor: failed to release funds: %w", releaseErr)
 		}
 
 		if updateErr := pps.paymentUpdater.UpdateStatus(ctx, payment.ID, domain.StatusFailed, ""); updateErr != nil {
-			return fmt.Errorf("payment processor: update status failed: %w", updateErr)
+			return fmt.Errorf("payment processor: failed to update status to failed: %w", updateErr)
 		}
 
 		return nil // Payment failed but handled correctly
@@ -111,12 +111,12 @@ func (pps *PaymentProcessorService) Process(ctx context.Context, payment *domain
 
 	// Step 3: Gateway succeeded → Confirm funds
 	if err := pps.walletConfirmer.Confirm(ctx, payment.UserID, payment.Amount, payment.ID); err != nil {
-		return fmt.Errorf("payment processor: confirm funds: %w", err)
+		return fmt.Errorf("payment processor: failed to confirm funds: %w", err)
 	}
 
 	// Step 4: Update status to completed
 	if err := pps.paymentUpdater.UpdateStatus(ctx, payment.ID, domain.StatusCompleted, gatewayRef); err != nil {
-		return fmt.Errorf("payment processor: update status completed: %w", err)
+		return fmt.Errorf("payment processor: failed to update status to completed: %w", err)
 	}
 
 	return nil
