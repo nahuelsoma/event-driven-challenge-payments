@@ -5,7 +5,6 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
-	"log/slog"
 
 	"github.com/nahuelsoma/event-driven-challenge-payments/cmd/internal/shared/domain"
 )
@@ -28,8 +27,6 @@ func NewPaymentReaderRepository(db paymentReaderDB) (*PaymentReaderRepository, e
 }
 
 func (r *PaymentReaderRepository) GetByID(ctx context.Context, paymentID string) (*domain.Payment, error) {
-	slog.DebugContext(ctx, "[DEBUG] PaymentReaderRepository.GetByID called", "payment_id", paymentID)
-
 	query := `
 		SELECT id, idempotency_key, user_id, amount, currency, status, created_at, updated_at
 		FROM payments
@@ -53,7 +50,7 @@ func (r *PaymentReaderRepository) GetByID(ctx context.Context, paymentID string)
 	}
 
 	if err != nil {
-		return nil, fmt.Errorf("failed to get payment by id: %w", err)
+		return nil, fmt.Errorf("payment reader: get by id: %w", err)
 	}
 
 	return &payment, nil

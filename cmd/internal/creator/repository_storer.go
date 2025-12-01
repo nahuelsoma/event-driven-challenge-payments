@@ -6,7 +6,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"log/slog"
 	"time"
 
 	"github.com/google/uuid"
@@ -32,8 +31,6 @@ func NewPaymentStorerRepository(db paymentStorerDB) (*PaymentStorerRepository, e
 }
 
 func (r *PaymentStorerRepository) GetByIDempotencyKey(ctx context.Context, idempotencyKey string) (*domain.Payment, error) {
-	slog.DebugContext(ctx, "[DEBUG] PaymentStorerRepository.GetByIDempotencyKey called", "idempotency_key", idempotencyKey)
-
 	query := `
 		SELECT id, idempotency_key, user_id, amount, currency, status, created_at, updated_at
 		FROM payments
@@ -57,15 +54,13 @@ func (r *PaymentStorerRepository) GetByIDempotencyKey(ctx context.Context, idemp
 	}
 
 	if err != nil {
-		return nil, fmt.Errorf("failed to get payment by idempotency key: %w", err)
+		return nil, fmt.Errorf("payment storer: get by idempotency key: %w", err)
 	}
 
 	return &payment, nil
 }
 
 func (r *PaymentStorerRepository) Save(ctx context.Context, payment *domain.Payment) error {
-	slog.DebugContext(ctx, "[DEBUG] PaymentStorerRepository.Save called", "payment_id", payment.ID, "user_id", payment.UserID, "amount", payment.Amount)
-
 	// Build event payload
 	payload, err := json.Marshal(map[string]interface{}{
 		"payment_id":      payment.ID,
@@ -76,7 +71,7 @@ func (r *PaymentStorerRepository) Save(ctx context.Context, payment *domain.Paym
 		"status":          payment.Status,
 	})
 	if err != nil {
-		return fmt.Errorf("failed to marshal event payload: %w", err)
+		return fmt.Errorf("payment storer: marshal payload: %w", err)
 	}
 
 	err = r.db.WithTransaction(ctx, func(tx *sql.Tx) error {
@@ -94,7 +89,7 @@ func (r *PaymentStorerRepository) Save(ctx context.Context, payment *domain.Paym
 			time.Now(),
 		)
 		if err != nil {
-			return fmt.Errorf("failed to insert payment event: %w", err)
+			return fmt.Errorf("insert event: %w", err)
 		}
 
 		// Insert into Read Model (for queries)
@@ -113,29 +108,27 @@ func (r *PaymentStorerRepository) Save(ctx context.Context, payment *domain.Paym
 			payment.UpdatedAt,
 		)
 		if err != nil {
-			return fmt.Errorf("failed to insert payment: %w", err)
+			return fmt.Errorf("insert payment: %w", err)
 		}
 
 		return nil
 	})
 
 	if err != nil {
-		return fmt.Errorf("failed to save payment: %w", err)
+		return fmt.Errorf("payment storer: save: %w", err)
 	}
 
 	return nil
 }
 
 func (r *PaymentStorerRepository) UpdateStatus(ctx context.Context, paymentID string, status domain.Status) error {
-	slog.DebugContext(ctx, "[DEBUG] PaymentStorerRepository.UpdateStatus called", "payment_id", paymentID, "status", status)
-
 	// Build event payload
 	payload, err := json.Marshal(map[string]interface{}{
 		"payment_id": paymentID,
 		"status":     status,
 	})
 	if err != nil {
-		return fmt.Errorf("failed to marshal event payload: %w", err)
+		return fmt.Errorf("payment storer: marshal payload: %w", err)
 	}
 
 	now := time.Now()
@@ -150,7 +143,7 @@ func (r *PaymentStorerRepository) UpdateStatus(ctx context.Context, paymentID st
 		`
 		err := tx.QueryRowContext(ctx, sequenceQuery, paymentID).Scan(&nextSequence)
 		if err != nil {
-			return fmt.Errorf("failed to get next sequence: %w", err)
+			return fmt.Errorf("get sequence: %w", err)
 		}
 
 		// Insert into Event Store
@@ -167,7 +160,7 @@ func (r *PaymentStorerRepository) UpdateStatus(ctx context.Context, paymentID st
 			now,
 		)
 		if err != nil {
-			return fmt.Errorf("failed to insert payment event: %w", err)
+			return fmt.Errorf("insert event: %w", err)
 		}
 
 		// Update Read Model
@@ -178,12 +171,12 @@ func (r *PaymentStorerRepository) UpdateStatus(ctx context.Context, paymentID st
 		`
 		result, err := tx.ExecContext(ctx, updateQuery, status, now, paymentID)
 		if err != nil {
-			return fmt.Errorf("failed to update payment status: %w", err)
+			return fmt.Errorf("update status: %w", err)
 		}
 
 		rowsAffected, err := result.RowsAffected()
 		if err != nil {
-			return fmt.Errorf("failed to get rows affected: %w", err)
+			return fmt.Errorf("rows affected: %w", err)
 		}
 
 		if rowsAffected == 0 {
@@ -194,7 +187,7 @@ func (r *PaymentStorerRepository) UpdateStatus(ctx context.Context, paymentID st
 	})
 
 	if err != nil {
-		return fmt.Errorf("failed to update payment status: %w", err)
+		return fmt.Errorf("payment storer: update status: %w", err)
 	}
 
 	return nil

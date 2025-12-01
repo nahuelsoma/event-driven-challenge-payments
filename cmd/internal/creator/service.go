@@ -57,7 +57,7 @@ func (pcs *PaymentCreatorService) Create(ctx context.Context, idempotencyKey str
 	// Step 1: Check if payment already exists
 	existingPayment, err := pcs.paymentStorer.GetByIDempotencyKey(ctx, idempotencyKey)
 	if err != nil {
-		return nil, fmt.Errorf("payment creator: failed to get payment by idempotency key: %w", err)
+		return nil, fmt.Errorf("payment creator: get by idempotency key: %w", err)
 	}
 	if existingPayment != nil {
 		return existingPayment, nil
@@ -67,27 +67,27 @@ func (pcs *PaymentCreatorService) Create(ctx context.Context, idempotencyKey str
 	payment := NewPayment(idempotencyKey, pr.UserID, pr.Amount, pr.Currency)
 
 	if err := pcs.paymentStorer.Save(ctx, payment); err != nil {
-		return nil, fmt.Errorf("payment creator: failed to save payment: %w", err)
+		return nil, fmt.Errorf("payment creator: save payment: %w", err)
 	}
 
 	// Step 3: Reserve funds in wallet
 	if err := pcs.walletReserver.Reserve(ctx, pr.UserID, pr.Amount, payment.ID); err != nil {
 		if err := pcs.paymentStorer.UpdateStatus(ctx, payment.ID, domain.StatusFailed); err != nil {
-			return nil, fmt.Errorf("payment creator: failed to update payment status: %w", err)
+			return nil, fmt.Errorf("payment creator: update status to failed: %w", err)
 		}
-		return nil, fmt.Errorf("payment creator: failed to reserve funds: %w", err)
+		return nil, fmt.Errorf("payment creator: reserve funds: %w", err)
 	}
 
 	// Step 4: Update status to "reserved"
 	if err := pcs.paymentStorer.UpdateStatus(ctx, payment.ID, domain.StatusReserved); err != nil {
-		return nil, fmt.Errorf("payment creator: failed to update payment status: %w", err)
+		return nil, fmt.Errorf("payment creator: update status to reserved: %w", err)
 	}
 
 	payment.UpdateStatus(domain.StatusReserved)
 
 	// Step 6: Publish payment event
 	if err := pcs.paymentPublisher.Publish(ctx, payment); err != nil {
-		return nil, fmt.Errorf("payment creator: failed to publish payment: %w", err)
+		return nil, fmt.Errorf("payment creator: publish payment: %w", err)
 	}
 
 	return payment, nil

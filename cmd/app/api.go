@@ -29,11 +29,6 @@ func StartAPI(database *database.DB, httpClient interface{}, messageBroker *mess
 	}
 
 	r.NoRoute(func(c *gin.Context) {
-		slog.WarnContext(c.Request.Context(), "Route not found",
-			"path", c.Request.URL.Path,
-			"method", c.Request.Method,
-			"client_ip", c.ClientIP(),
-		)
 		c.JSON(http.StatusNotFound, gin.H{
 			"message": "the requested resource was not found",
 		})

@@ -18,4 +18,3 @@ func Build(db paymentReaderDB) (*Handler, error) {
 
 	return h, nil
 }
-
