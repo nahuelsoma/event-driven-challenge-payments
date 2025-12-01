@@ -17,7 +17,7 @@ type WalletReserver interface {
 type PaymentStorer interface {
 	GetByIDempotencyKey(ctx context.Context, idempotencyKey string) (*domain.Payment, error)
 	Save(ctx context.Context, payment *domain.Payment) error
-	UpdateStatus(ctx context.Context, paymentID string, status domain.Status) error
+	UpdateStatus(ctx context.Context, paymentID string, status domain.Status, gatewayRef string) error
 }
 
 // PaymentPublisher interface for publishing payments
@@ -72,14 +72,14 @@ func (pcs *PaymentCreatorService) Create(ctx context.Context, idempotencyKey str
 
 	// Step 3: Reserve funds in wallet
 	if err := pcs.walletReserver.Reserve(ctx, pr.UserID, pr.Amount, payment.ID); err != nil {
-		if err := pcs.paymentStorer.UpdateStatus(ctx, payment.ID, domain.StatusFailed); err != nil {
+		if err := pcs.paymentStorer.UpdateStatus(ctx, payment.ID, domain.StatusFailed, ""); err != nil {
 			return nil, fmt.Errorf("payment creator: update status to failed: %w", err)
 		}
 		return nil, fmt.Errorf("payment creator: reserve funds: %w", err)
 	}
 
 	// Step 4: Update status to "reserved"
-	if err := pcs.paymentStorer.UpdateStatus(ctx, payment.ID, domain.StatusReserved); err != nil {
+	if err := pcs.paymentStorer.UpdateStatus(ctx, payment.ID, domain.StatusReserved, ""); err != nil {
 		return nil, fmt.Errorf("payment creator: update status to reserved: %w", err)
 	}
 

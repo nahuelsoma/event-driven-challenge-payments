@@ -1,12 +1,16 @@
 package finder
 
-func Build(db paymentReaderDB) (*Handler, error) {
-	pr, err := NewPaymentReaderRepository(db)
+import (
+	"github.com/nahuelsoma/event-driven-challenge-payments/cmd/internal/shared/paymentstorer"
+)
+
+func Build(db paymentstorer.PaymentDB) (*Handler, error) {
+	ps, err := paymentstorer.NewStorer(db)
 	if err != nil {
 		return nil, err
 	}
 
-	pf, err := NewPaymentFinderService(pr)
+	pf, err := NewPaymentFinderService(ps)
 	if err != nil {
 		return nil, err
 	}
