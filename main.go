@@ -4,12 +4,13 @@ import (
 	"log"
 	"log/slog"
 	"os"
+	"time"
 
 	"github.com/nahuelsoma/event-driven-challenge-payments/cmd/app"
 	"github.com/nahuelsoma/event-driven-challenge-payments/config"
 	"github.com/nahuelsoma/event-driven-challenge-payments/infrastructure/database"
-	"github.com/nahuelsoma/event-driven-challenge-payments/infrastructure/http"
 	"github.com/nahuelsoma/event-driven-challenge-payments/infrastructure/messagebroker"
+	"github.com/nahuelsoma/event-driven-challenge-payments/infrastructure/restclient"
 )
 
 func main() {
@@ -31,13 +32,13 @@ func main() {
 	}
 	defer dbConn.Close()
 
-	// Create HTTP client
-	httpConfig := map[string]string{
-		"host": "localhost",
-		"port": "3000",
+	// Create wallet HTTP client
+	httpConfig := &restclient.Config{
+		BaseURL: "http://test-wallet-service.com",
+		Timeout: 300 * time.Millisecond,
 	}
 
-	walletClient, err := http.NewHTTPClient(httpConfig)
+	walletClient, err := restclient.NewRestClient(httpConfig)
 	if err != nil {
 		log.Fatalf("main: failed to create HTTP client: %v", err)
 	}
@@ -50,7 +51,7 @@ func main() {
 	defer messageBrokerConn.Close()
 
 	// Start consumer first (runs in background goroutines)
-	if err := app.StartConsumer(dbConn, messageBrokerConn, walletClient, cfg.Exchange, cfg.QueueName); err != nil {
+	if err := app.StartConsumer(dbConn, walletClient, messageBrokerConn, cfg.Exchange, cfg.QueueName); err != nil {
 		log.Fatalf("main: failed to start consumer: %v", err)
 	}
 
