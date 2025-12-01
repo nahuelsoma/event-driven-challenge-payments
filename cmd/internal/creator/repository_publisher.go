@@ -3,6 +3,7 @@ package creator
 import (
 	"context"
 	"errors"
+	"log/slog"
 
 	"github.com/nahuelsoma/event-driven-challenge-payments/cmd/internal/shared/domain"
 )
@@ -22,6 +23,7 @@ func NewPaymentPublisherRepository(conn interface{}) (*PaymentPublisherRepositor
 }
 
 func (r *PaymentPublisherRepository) Publish(ctx context.Context, payment *domain.Payment) error {
+	slog.DebugContext(ctx, "[DEBUG] PaymentPublisherRepository.Publish called", "payment_id", payment.ID, "status", payment.Status)
 	// TODO: Implement the logic to publish the payment
 	return nil
 }

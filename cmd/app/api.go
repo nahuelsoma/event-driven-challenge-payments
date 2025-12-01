@@ -8,45 +8,22 @@ import (
 
 	"github.com/gin-gonic/gin"
 	"github.com/nahuelsoma/event-driven-challenge-payments/cmd/internal/creator"
+	"github.com/nahuelsoma/event-driven-challenge-payments/cmd/internal/finder"
 )
 
 // StartAPI initializes and starts the HTTP API server
 func StartAPI(database interface{}, httpClient interface{}, messageBroker interface{}) error {
-	// Create payment storer repository
-	ps, err := creator.NewPaymentStorerRepository(database)
-	if err != nil {
-		return fmt.Errorf("api: failed to create payment storer repository: %w", err)
-	}
-
-	// Create wallet reserver repository
-	wr, err := creator.NewWalletReserverRepository(httpClient)
-	if err != nil {
-		return fmt.Errorf("api: failed to create wallet reserver repository: %w", err)
-	}
-
-	// Create publisher repository
-	pp, err := creator.NewPaymentPublisherRepository(messageBroker)
-	if err != nil {
-		return fmt.Errorf("api: failed to create publisher repository: %w", err)
-	}
-
-	// Create payment creator service
-	pc, err := creator.NewPaymentCreatorService(ps, wr, pp)
-	if err != nil {
-		return fmt.Errorf("api: failed to create payment creator service: %w", err)
-	}
-
-	// Create handler
-	h, err := creator.NewHandler(pc)
-	if err != nil {
-		return fmt.Errorf("api: failed to create handler: %w", err)
-	}
-
 	r := gin.New()
 
 	apiV1 := r.Group("/api/v1")
-	{
-		apiV1.POST("/payments", h.Create)
+
+	// Each vertical owns its internal wiring
+	if err := creator.Start(apiV1, database, httpClient, messageBroker); err != nil {
+		return fmt.Errorf("api: failed to start creator vertical: %w", err)
+	}
+
+	if err := finder.Start(apiV1, database); err != nil {
+		return fmt.Errorf("api: failed to start finder vertical: %w", err)
 	}
 
 	r.NoRoute(func(c *gin.Context) {
