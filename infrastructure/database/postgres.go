@@ -4,33 +4,12 @@ import (
 	"context"
 	"database/sql"
 	"errors"
-	"fmt"
 	"math/rand"
 	"strings"
 	"time"
 
 	_ "github.com/lib/pq"
 )
-
-// Config holds the PostgreSQL connection configuration
-type Config struct {
-	Host     string
-	Port     string
-	User     string
-	Password string
-	DBName   string
-	SSLMode  string
-}
-
-// ConnectionURL returns the PostgreSQL connection URL
-func (c *Config) ConnectionURL() string {
-	sslMode := c.SSLMode
-	if sslMode == "" {
-		sslMode = "disable"
-	}
-	return fmt.Sprintf("postgres://%s:%s@%s:%s/%s?sslmode=%s",
-		c.User, c.Password, c.Host, c.Port, c.DBName, sslMode)
-}
 
 // DB represents a PostgreSQL database with retry capabilities
 type DB struct {
@@ -40,12 +19,12 @@ type DB struct {
 }
 
 // NewPostgresConnection creates a new PostgreSQL database connection with connection pooling
-func NewPostgresConnection(config *Config) (*DB, error) {
-	if config == nil {
-		return nil, errors.New("database: config cannot be nil")
+func NewPostgresConnection(url string) (*DB, error) {
+	if url == "" {
+		return nil, errors.New("database: url cannot be empty")
 	}
 
-	conn, err := sql.Open("postgres", config.ConnectionURL())
+	conn, err := sql.Open("postgres", url)
 	if err != nil {
 		return nil, err
 	}
