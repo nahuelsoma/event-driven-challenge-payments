@@ -36,3 +36,8 @@ func (p *Payment) Validate() error {
 func (p *Payment) Parse(body []byte) error {
 	return json.Unmarshal(body, p)
 }
+
+// Marshal marshals a payment to bytes
+func (p *Payment) Marshal() ([]byte, error) {
+	return json.Marshal(p)
+}
