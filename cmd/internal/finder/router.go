@@ -11,5 +11,6 @@ func Start(rg *gin.RouterGroup, db paymentReaderDB) error {
 	}
 
 	rg.GET("/payments/:id", h.Find)
+	rg.GET("/payments/:id/events", h.FindEvents)
 	return nil
 }
