@@ -1,0 +1,2081 @@
+## Diseño de Componentes
+
+### Wallet Client (shared)
+
+Implementación concreta que satisface todas las interfaces:
+
+```go
+// cmd/internal/shared/client/wallet.go
+type WalletClient struct {
+    client *http.Client  // Generic HTTP client from infrastructure
+}
+
+func (c *WalletClient) Reserve(ctx, userID, amount, paymentID) error
+func (c *WalletClient) Confirm(ctx, userID, amount, paymentID) error
+func (c *WalletClient) Release(ctx, userID, amount, paymentID) error
+func (c *WalletClient) GetBalance(ctx, userID) (*BalanceResponse, error)
+```
+
+### Dependency Injection (cmd/main.go)
+
+```go
+func main() {
+    cfg := config.Load()
+
+    // Generic infrastructure (reusable)
+    db := database.NewPostgresConnection(cfg.DatabaseURL)
+    rabbitConn := rabbitmq.NewConnection(cfg.RabbitMQURL)
+    httpClient := http.NewClient(cfg.WalletServiceURL, 10*time.Second)
+
+    // Start
+    app.StartConsumer(db, rabbitConn, httpClient)  // Runs in background (goroutine internal)
+    app.StartRouter(db, httpClient)                 // Blocking
+}
+```
+
+### App Layer (cmd/app/api.go)
+
+Cada vertical expone una función `Start()` que encapsula su DI interno. El app layer solo conecta infraestructura con verticales:
+
+```go
+func StartAPI(db interface{}, httpClient interface{}, rabbitConn interface{}) {
+    router := gin.New()
+    api := router.Group("/api/v1")
+
+    // Each vertical owns its internal wiring
+    creator.Start(api, db, httpClient, rabbitConn)
+    finder.Start(api, db)
+
+    router.Run(":3000")
+}
+```
+
+### Vertical Start Pattern (cmd/internal/creator/router.go)
+
+Cada vertical encapsula su DI interno. El app layer no conoce los detalles:
+
+```go
+func Start(rg *gin.RouterGroup, db, httpClient, rabbitConn interface{}) error {
+    // Internal wiring (hidden from app layer)
+    storer, _ := NewPaymentStorerRepository(db)
+    reserver, _ := NewWalletReserverRepository(httpClient)
+    publisher, _ := NewPaymentPublisherRepository(rabbitConn)
+
+    service, _ := NewPaymentCreatorService(storer, reserver, publisher)
+    handler, _ := NewHandler(service)
+
+    rg.POST("/payments", handler.Create)
+    return nil
+}
+```
+
+**Beneficios:**
+
+- **Encapsulación**: App layer no conoce detalles internos
+- **Bajo acoplamiento**: Cambios internos no afectan app layer
+- **Consistencia**: Todas las verticales siguen el mismo patrón
+
+---
+
+## Flujos de Pago
+
+### Happy Path
+
+```
+Client          Payment API         Wallet API          Consumer         Gateway (ext)
+  │                  │                   │                   │                  │
+  │ POST /payments   │                   │                   │                  │
+  │─────────────────▶│                   │                   │                  │
+  │                  │ POST /reserve     │                   │                  │
+  │                  │──────────────────▶│                   │                  │
+  │                  │◀──────────────────│ 200 OK            │                  │
+  │                  │                   │                   │                  │
+  │                  │ Publish event     │                   │                  │
+  │                  │─────────────────────────────────────▶│                  │
+  │◀─────────────────│ 201 {reserved}    │                   │                  │
+  │                  │                   │                   │                  │
+  │                  │                   │                   │ Process payment  │
+  │                  │                   │                   │─────────────────▶│
+  │                  │                   │                   │◀─────────────────│
+  │                  │                   │                   │ 200 {gateway_ref}│
+  │                  │                   │                   │                  │
+  │                  │                   │ POST /confirm     │                  │
+  │                  │                   │◀──────────────────│                  │
+  │                  │                   │──────────────────▶│ 200 OK           │
+  │                  │                   │                   │                  │
+  │                  │                   │                   │ Update DB        │
+  │                  │                   │                   │ (completed,      │
+  │                  │                   │                   │  gateway_ref)    │
+```
+
+### Saldo Insuficiente
+
+```
+Client          Payment API         Wallet API          Consumer         Gateway (ext)
+  │                  │                   │                   │                  │
+  │ POST /payments   │                   │                   │                  │
+  │─────────────────▶│                   │                   │                  │
+  │                  │ POST /reserve     │                   │                  │
+  │                  │──────────────────▶│                   │                  │
+  │                  │◀──────────────────│                   │                  │
+  │                  │ 400 insufficient  │                   │                  │
+  │◀─────────────────│                   │                   │                  │
+  │ 400 {error}      │                   │                   │                  │
+```
+
+### Gateway Timeout
+
+```
+Client          Payment API         Wallet API          Consumer         Gateway (ext)
+  │                  │                   │                   │                  │
+  │                  │                   │                   │ Process message  │
+  │                  │                   │                   │─────────────────▶│
+  │                  │                   │                   │◀─────────────────│
+  │                  │                   │                   │     Timeout      │
+  │                  │                   │                   │                  │
+  │                  │                   │                   │ Retry (max 3)    │
+  │                  │                   │                   │─────────────────▶│
+  │                  │                   │                   │◀─────────────────│
+  │                  │                   │                   │     Timeout      │
+  │                  │                   │                   │                  │
+  │                  │                   │ POST /release     │                  │
+  │                  │                   │◀──────────────────│                  │
+  │                  │                   │──────────────────▶│ 200 OK           │
+  │                  │                   │                   │                  │
+  │                  │                   │                   │ Update DB        │
+  │                  │                   │                   │ (failed)         │
+  │                  │                   │                   │                  │
+  │                  │                   │                   │ Move to DLQ      │
+```
+
+---
+
+## Wallet: Estados del Balance
+
+```
+┌─────────────────────────────────────────────────────────────┐
+│                      User Wallet                            │
+│                                                             │
+│  Available: $150     Reserved: $50     Total: $200         │
+└─────────────────────────────────────────────────────────────┘
+
+Operaciones:
+┌───────────┬────────────┬──────────┬─────────────────────────┐
+│ Operación │ Available  │ Reserved │ Descripción             │
+├───────────┼────────────┼──────────┼─────────────────────────┤
+│ Reserve   │ -100       │ +100     │ Bloquea fondos          │
+│ Confirm   │ —          │ -100     │ Deduce bloqueados       │
+│ Release   │ +100       │ -100     │ Libera bloqueados       │
+│ Refund    │ +100       │ —        │ Devuelve fondos         │
+└───────────┴────────────┴──────────┴─────────────────────────┘
+```
+
+---
+
+## Eventos
+
+| Evento             | Productor   | Descripción                      |
+| ------------------ | ----------- | -------------------------------- |
+| `PaymentCreated`   | Payment API | Pago creado, fondos reservados   |
+| `PaymentCompleted` | Consumer    | Pago exitoso, fondos confirmados |
+| `PaymentFailed`    | Consumer    | Pago falló, fondos liberados     |
+
+```json
+{
+  "event_id": "evt_abc123",
+  "event_type": "PaymentCreated",
+  "timestamp": "2024-01-15T10:30:00Z",
+  "payload": {
+    "payment_id": "pay_xyz789",
+    "user_id": "usr_123",
+    "amount": 100.0,
+    "status": "reserved" // pending, reserved, completed, failed
+  }
+}
+```
+
+### Colas RabbitMQ
+
+```
+├── payments.created      # Pagos pendientes de procesar
+└── payments.dead-letter  # Mensajes fallidos (DLQ)
+```
+
+### Garantías de Entrega
+
+| Semántica         | Descripción                     | Usado             |
+| ----------------- | ------------------------------- | ----------------- |
+| At-most-once      | Puede perderse, nunca duplicado | ❌                |
+| **At-least-once** | Garantizado, puede duplicarse   | ✅                |
+| Exactly-once      | Exactamente una vez             | ❌ (muy complejo) |
+
+**Implementación:** At-least-once + Idempotencia = Comportamiento efectivo "exactly-once".
+
+```
+┌─────────────────────────────────────────────────────────────────┐
+│  1. Publisher envía mensaje                                     │
+│  2. RabbitMQ persiste en disco                                  │
+│  3. Consumer recibe y procesa                                   │
+│  4. Consumer envía ACK                                          │
+│  5. RabbitMQ elimina mensaje                                    │
+│                                                                 │
+│  Si falla antes del ACK → RabbitMQ reentrega (duplicado)       │
+│  Consumer detecta duplicado → Skip (idempotencia)              │
+└─────────────────────────────────────────────────────────────────┘
+```
+
+> **¿Por qué no exactly-once puro?** Requiere transacciones distribuidas (2PC) o brokers especializados como Kafka con transacciones nativas. RabbitMQ no lo soporta nativamente. La industria generalmente usa at-least-once + idempotencia porque es simple, funciona con cualquier broker, y el resultado de negocio es equivalente.
+
+---
+
+## Patrón Saga (Choreography)
+
+### ¿Qué es una Saga?
+
+Una **Saga** es una secuencia de transacciones locales donde cada paso tiene una **compensación** definida en caso de falla. Permite mantener consistencia en sistemas distribuidos sin usar transacciones distribuidas (2PC).
+
+```
+SAGA = "Si todo sale bien: A → B → C"
+       "Si C falla: deshacer B → deshacer A"
+```
+
+### Nuestro Flujo como Saga
+
+```
+┌─────────────────────────────────────────────────────────────────────┐
+│                      Payment Saga (Choreography)                    │
+├─────────────────────────────────────────────────────────────────────┤
+│  Paso 1: Crear pago (pending)     ←→  Compensar: marcar failed      │
+│  Paso 2: Reservar fondos          ←→  Compensar: release funds      │
+│  Paso 3: Llamar gateway           ←→  (sin compensación, es externo)│
+│  Paso 4: Confirmar fondos         ←→  (éxito final)                 │
+└─────────────────────────────────────────────────────────────────────┘
+```
+
+**Ejemplo de flujo exitoso:**
+
+```
+Create Payment → Reserve Funds → Gateway OK → Confirm Funds ✓
+```
+
+**Ejemplo de falla con compensación:**
+
+```
+Create Payment → Reserve Funds → Gateway TIMEOUT → Release Funds (compensación)
+                                                 → Mark Failed (compensación)
+```
+
+### ¿Por qué Choreography y no Orchestration?
+
+Existen dos formas de coordinar una Saga:
+
+| Aspecto            | Choreography (✅ usamos)          | Orchestration                     |
+| ------------------ | --------------------------------- | --------------------------------- |
+| **Coordinación**   | Cada servicio reacciona a eventos | Un servicio central coordina todo |
+| **Complejidad**    | Baja                              | Alta                              |
+| **Acoplamiento**   | Bajo (servicios independientes)   | Alto (dependen del orquestador)   |
+| **Punto de falla** | Distribuido                       | Centralizado                      |
+| **Ideal para**     | Flujos simples (2-4 pasos)        | Flujos complejos (5+ pasos)       |
+
+**Elegimos Choreography porque:**
+
+1. **Flujo simple**: Solo 4 pasos (crear → reservar → gateway → confirmar)
+2. **Desacoplamiento**: Payment Service y Wallet Service no se conocen directamente
+3. **Resiliencia**: No hay punto único de falla
+4. **Simplicidad**: Menos código, menos infraestructura
+
+### Implementación en el Sistema
+
+```
+┌─────────────────┐  PaymentCreated   ┌─────────────────┐
+│  Payment API    │ ────────────────▶ │    Consumer     │
+│  (crea pago,    │                   │  (escucha,      │
+│   reserva)      │                   │   procesa)      │
+└─────────────────┘                   └────────┬────────┘
+                                               │
+                                    ┌──────────┴──────────┐
+                                    ▼                     ▼
+                              Gateway OK            Gateway FAIL
+                                    │                     │
+                                    ▼                     ▼
+                            Wallet.Confirm()      Wallet.Release()
+                            Payment.Complete()    Payment.Fail()
+```
+
+El **Consumer** actúa como coordinador implícito: decide si confirmar o compensar según el resultado del gateway.
+
+> **Cuándo considerar Orchestration:** Si el sistema creciera a 5+ servicios con lógica condicional compleja (ej: verificación de fraude, notificaciones, auditoría), un orquestador central facilitaría el debugging y el tracking del estado de cada transacción.
+
+---
+
+## API Endpoints
+
+### Payment Service
+
+| Method | Endpoint               | Descripción    |
+| ------ | ---------------------- | -------------- |
+| POST   | `/api/v1/payments`     | Crear pago     |
+| GET    | `/api/v1/payments/:id` | Consultar pago |
+| GET    | `/health`              | Health check   |
+
+### Wallet Service
+
+| Method | Endpoint                           | Descripción         |
+| ------ | ---------------------------------- | ------------------- |
+| GET    | `/api/v1/wallets/:user_id/balance` | Consultar balance   |
+| POST   | `/api/v1/wallets/:user_id/reserve` | Reservar fondos     |
+| POST   | `/api/v1/wallets/:user_id/confirm` | Confirmar deducción |
+| POST   | `/api/v1/wallets/:user_id/release` | Liberar reserva     |
+| POST   | `/api/v1/wallets/:user_id/refund`  | Reembolsar          |
+| GET    | `/health`                          | Health check        |
+
+---
+
+## Base de Datos (CQRS + Event Sourcing)
+
+Cada servicio usa **PostgreSQL** con dos modelos de datos:
+
+- **Event Store**: Fuente de verdad (solo INSERT, inmutable)
+- **Read Model**: Vista optimizada para queries (derivada de eventos)
+
+```
+┌─────────────────────────────────────────────────────────────────────────┐
+│                              FLUJO                                      │
+│                                                                         │
+│   COMMAND (Write)                          QUERY (Read)                 │
+│        │                                        │                       │
+│        ▼                                        ▼                       │
+│   ┌─────────────────┐  sync (tx)   ┌─────────────────┐                 │
+│   │  Event Store    │ ───────────▶ │   Read Model    │                 │
+│   │  (INSERT only)  │              │   (SELECT)      │                 │
+│   └─────────────────┘              └─────────────────┘                 │
+│                                                                         │
+│   Fuente de verdad                 Optimizado para                      │
+│   (inmutable)                      lecturas                             │
+└─────────────────────────────────────────────────────────────────────────┘
+```
+
+### Payment Service
+
+```sql
+-- EVENT STORE (fuente de verdad, solo INSERT)
+CREATE TABLE payment_events (
+    id              TEXT PRIMARY KEY,
+    payment_id      TEXT NOT NULL,
+    sequence        INTEGER NOT NULL,
+    event_type      TEXT NOT NULL,  -- created, reserved, completed, failed
+    payload         JSONB NOT NULL,
+    created_at      TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+
+    UNIQUE(payment_id, sequence)  -- Previene eventos concurrentes duplicados
+);
+
+CREATE INDEX idx_payment_events_payment_id ON payment_events(payment_id);
+
+-- READ MODEL (para queries rápidas)
+CREATE TABLE payments (
+    id              TEXT PRIMARY KEY,
+    idempotency_key TEXT UNIQUE,      -- Para idempotencia de requests
+    user_id         TEXT NOT NULL,
+    amount          DECIMAL(15,2) NOT NULL,
+    currency        TEXT NOT NULL,
+    status          TEXT NOT NULL DEFAULT 'pending',
+    gateway_ref     TEXT,
+    failure_reason  TEXT,
+    created_at      TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    updated_at      TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+-- Status: pending, reserved, completed, failed, expired
+```
+
+### Wallet Service
+
+```sql
+-- EVENT STORE (wallet_transactions actúa como event store)
+CREATE TABLE wallet_transactions (
+    id              TEXT PRIMARY KEY,
+    wallet_id       TEXT NOT NULL,
+    payment_id      TEXT,
+    type            TEXT NOT NULL,  -- reserve, confirm, release, refund
+    amount          DECIMAL(15,2) NOT NULL,
+    balance_before  DECIMAL(15,2) NOT NULL,
+    balance_after   DECIMAL(15,2) NOT NULL,
+    created_at      TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE INDEX idx_wallet_transactions_wallet_id ON wallet_transactions(wallet_id);
+
+-- READ MODEL (estado actual del wallet)
+CREATE TABLE wallets (
+    id                TEXT PRIMARY KEY,
+    user_id           TEXT UNIQUE NOT NULL,
+    available_balance DECIMAL(15,2) DEFAULT 0,
+    reserved_balance  DECIMAL(15,2) DEFAULT 0,
+    currency          TEXT DEFAULT 'USD',
+    version           INTEGER DEFAULT 1,  -- Optimistic locking
+    created_at        TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    updated_at        TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+
+    CONSTRAINT positive_available CHECK (available_balance >= 0),
+    CONSTRAINT positive_reserved CHECK (reserved_balance >= 0)
+);
+```
+
+### Escritura (Evento + Read Model en una transacción)
+
+Ver implementación completa en sección **Concurrencia e Idempotencia → Idempotency Key (API)**.
+
+---
+
+## Concurrencia en CQRS + Event Sourcing
+
+Problemas específicos del patrón CQRS + Event Sourcing y sus soluciones.
+
+### Problemas y Soluciones
+
+| Problema                 | Descripción                                  | Solución                    |
+| ------------------------ | -------------------------------------------- | --------------------------- |
+| **Dual Write**           | Event Store y Read Model deben sincronizarse | Transacción única           |
+| **Read-Your-Own-Writes** | Usuario no ve lo que acaba de crear          | Retornar desde comando      |
+| **Eventos Concurrentes** | Dos eventos para mismo pago simultáneamente  | Secuencia + UNIQUE          |
+| **Read Model Lag**       | Read Model desactualizado por ms             | No aplica (sync tx)         |
+| **Rebuild Conflicto**    | Nuevos eventos durante rebuild               | No aplica (tablas pequeñas) |
+
+---
+
+### 1. Dual Write
+
+**Problema:** Si Event Store y Read Model se escriben por separado, uno puede fallar.
+
+**Solución:** Transacción única en el mismo DB.
+
+```go
+tx, _ := s.db.Begin()
+defer tx.Rollback()  // Se ejecuta al salir. Si ya hubo Commit, no hace nada.
+
+payment := &Payment{
+    ID:             uuid.New().String(),
+    IdempotencyKey: req.IdempotencyKey,
+    UserID:         req.UserID,
+    Amount:         req.Amount,
+    Status:         domain.StatusPending,
+}
+
+// Event Store (fuente de verdad)
+tx.Exec(`INSERT INTO payment_events (id, payment_id, sequence, event_type, payload)
+         VALUES ($1, $2, $3, $4, $5)`,
+    eventID, payment.ID, 1, "created", payload)
+
+// Read Model (para queries)
+tx.Exec(`INSERT INTO payments (id, idempotency_key, user_id, amount, status)
+         VALUES ($1, $2, $3, $4, $5)`,
+    payment.ID, payment.IdempotencyKey, payment.UserID, payment.Amount, payment.Status)
+
+if err := tx.Commit(); err != nil {
+    return nil, err  // Rollback automático (defer)
+}
+return payment, nil
+```
+
+**¿Qué pasa si falla?**
+
+| Momento de falla            | Resultado                              | Estado            |
+| --------------------------- | -------------------------------------- | ----------------- |
+| Falla INSERT en Event Store | Rollback automático                    | Nada se guardó ✅ |
+| Falla INSERT en Read Model  | Rollback (deshace Event Store también) | Nada se guardó ✅ |
+| Falla Commit                | Rollback automático                    | Nada se guardó ✅ |
+| Después de Commit OK        | Datos ya persistidos en disco          | Guardado ✅       |
+
+La propiedad **ACID** de PostgreSQL garantiza: ambos se guardan o ninguno.
+
+> **Nota producción:** Si Event Store y Read Model estuvieran en DBs diferentes (ej: PostgreSQL + Elasticsearch), se usa el **Transactional Outbox Pattern**:
+>
+> 1. Guardar evento + registro en tabla `outbox` (misma transacción)
+> 2. Proceso background publica mensajes del outbox a una cola
+> 3. Consumer actualiza el Read Model
+>
+> Esto garantiza consistencia eventual sin perder eventos.
+
+---
+
+### 2. Read-Your-Own-Writes
+
+**Problema:** Usuario crea pago, consulta inmediatamente, pero Read Model aún no reflejó el cambio.
+
+**Solución:** Retornar el resultado desde el comando, no hacer query al Read Model.
+
+```go
+func (h *Handler) CreatePayment(c *gin.Context) {
+    payment, _ := h.service.Create(req)
+
+    // Retornar el payment que acabamos de crear
+    // NO hacer: h.repo.GetByID(payment.ID)
+    c.JSON(201, payment)
+}
+```
+
+> **Nota producción:** Para sistemas con consistencia eventual, se usa **Version Token**:
+>
+> - El write retorna un token de versión en header `X-Version-Token`
+> - El cliente envía el token en queries: `GET /payments/123?after_version=v5`
+> - El servidor espera hasta que el Read Model alcance esa versión
+
+---
+
+### 3. Eventos Concurrentes
+
+**Problema:** Dos procesos intentan escribir eventos para el mismo payment simultáneamente.
+
+**Solución:** Campo `sequence` con constraint UNIQUE.
+
+```sql
+CREATE TABLE payment_events (
+    payment_id  TEXT NOT NULL,
+    sequence    INTEGER NOT NULL,
+    -- ...
+    UNIQUE(payment_id, sequence)  -- Solo uno puede escribir secuencia N
+);
+```
+
+```go
+func (s *EventStore) Append(paymentID string, event Event) error {
+    // Intentar insertar con siguiente secuencia
+    _, err := s.db.Exec(`
+        INSERT INTO payment_events (payment_id, sequence, event_type, payload)
+        SELECT $1, COALESCE(MAX(sequence), 0) + 1, $2, $3
+        FROM payment_events WHERE payment_id = $1
+    `, paymentID, event.Type, event.Payload)
+
+    if isUniqueViolation(err) {
+        return ErrConcurrencyConflict  // Reintentar con nuevo estado
+    }
+    return err
+}
+```
+
+> **Nota producción:** Sistemas como EventStoreDB usan **Expected Version**:
+>
+> ```go
+> // El cliente especifica qué versión espera
+> err := store.Append(streamID, expectedVersion: 5, events)
+> // Si la versión actual no es 5, retorna conflict
+> ```
+
+---
+
+### 4. Read Model Lag
+
+**Problema:** En sistemas con proyección asíncrona, el Read Model puede estar atrasado por milisegundos.
+
+**Solución:** No aplica en nuestro caso porque usamos transacción síncrona.
+
+> **Nota producción:** Para sistemas con proyección asíncrona, se acepta la consistencia eventual (es normal) o se implementa polling con fallback al Event Store:
+>
+> ```go
+> payment, err := readModel.GetByID(id)
+> if err == ErrNotFound {
+>     events := eventStore.GetByPaymentID(id)
+>     payment = rebuildFromEvents(events)
+> }
+> ```
+
+---
+
+### 5. Rebuild Conflicto
+
+**Problema:** Nuevos eventos llegan mientras se reconstruye el Read Model.
+
+**Solución:** No aplicado en nuestro caso.
+
+> **Nota producción:** Para sistemas grandes se usan **Snapshots**:
+>
+> - Guardar "fotos" del estado cada N eventos
+> - Para reconstruir: cargar snapshot + aplicar solo eventos posteriores
+>
+> ```sql
+> CREATE TABLE snapshots (
+>     aggregate_id TEXT, version INTEGER, state JSONB,
+>     PRIMARY KEY (aggregate_id, version)
+> );
+> ```
+
+---
+
+## Manejo de Errores
+
+### Retry en Capa de Infraestructura
+
+El retry se implementa en la capa de infraestructura (no en services) para que sea transparente:
+
+```
+┌─────────────────────────────────────────────────────────────────┐
+│   Handler ──▶ Service ──▶ Repository ──▶ Infrastructure        │
+│                                              │                  │
+│                                              ▼                  │
+│                                    ┌─────────────────┐          │
+│                                    │   DB Client     │          │
+│                                    │  - Retry ✅     │          │
+│                                    │  - Timeout ✅   │          │
+│                                    └─────────────────┘          │
+│                                                                 │
+│   Services no conocen detalles de resiliencia                   │
+└─────────────────────────────────────────────────────────────────┘
+```
+
+```go
+// infrastructure/database/postgres.go
+type DB struct {
+    conn       *sql.DB
+    maxRetries int
+    baseDelay  time.Duration
+}
+
+func NewPostgresConnection(url string) *DB {
+    conn, _ := sql.Open("postgres", url)
+    return &DB{conn: conn, maxRetries: 3, baseDelay: 100 * time.Millisecond}
+}
+
+// Wrapper con retry para transacciones
+func (db *DB) WithTransaction(ctx context.Context, fn func(tx *sql.Tx) error) error {
+    var lastErr error
+
+    for attempt := 0; attempt < db.maxRetries; attempt++ {
+        tx, err := db.conn.BeginTx(ctx, nil)
+        if err != nil {
+            if isTransientError(err) {
+                lastErr = err
+                time.Sleep(db.exponentialBackoff(attempt))
+                continue
+            }
+            return err
+        }
+
+        if err := fn(tx); err != nil {
+            tx.Rollback()
+            if isTransientError(err) {
+                lastErr = err
+                time.Sleep(db.exponentialBackoff(attempt))
+                continue
+            }
+            return err
+        }
+
+        return tx.Commit()
+    }
+    return lastErr
+}
+
+func isTransientError(err error) bool {
+    return errors.Is(err, sql.ErrConnDone) ||
+           strings.Contains(err.Error(), "deadlock") ||
+           strings.Contains(err.Error(), "connection refused")
+}
+
+// Exponential backoff con jitter para evitar thundering herd
+func (db *DB) exponentialBackoff(attempt int) time.Duration {
+    backoff := db.baseDelay * time.Duration(1<<attempt)  // 100ms, 200ms, 400ms
+    jitter := time.Duration(rand.Int63n(int64(backoff / 2)))
+    return backoff + jitter
+}
+```
+
+**Uso en Service (limpio, sin conocer retry):**
+
+```go
+func (s *Service) CreatePayment(req CreateRequest) (*Payment, error) {
+    var payment *Payment
+
+    err := s.db.WithTransaction(ctx, func(tx *sql.Tx) error {
+        payment = &Payment{ID: uuid.New().String(), ...}
+        tx.Exec("INSERT INTO payment_events ...")
+        tx.Exec("INSERT INTO payments ...")
+        return nil
+    })
+
+    return payment, err
+}
+```
+
+### Retry Policy
+
+#### ¿Dónde se aplica retry?
+
+| Componente               | Retry | Política                                        |
+| ------------------------ | ----- | ----------------------------------------------- |
+| Base de datos            | ✅    | 3 retries, exponencial (100ms, 200ms, 400ms)    |
+| API → Wallet (HTTP)      | ✅    | 2 retries, lineal rápido (50ms, 50ms)           |
+| Consumer → Wallet (HTTP) | ✅    | 3 retries, exponencial (100ms, 200ms, 400ms)    |
+| Consumer → Gateway       | ✅    | 3 retries, exponencial (100ms, 200ms, 400ms)    |
+| Consumer (mensajes)      | ✅    | Reentrega automática via RabbitMQ si no hay ACK |
+
+> **Nota:** El retry en código es **adicional** al de RabbitMQ. Primero se reintenta rápido en código (errores transitorios de red), si persiste el error, se hace NACK y RabbitMQ reencola el mensaje para reintentar más tarde.
+
+#### Configuración por tipo
+
+| Tipo                       | MaxRetries | Base Delay | Backoff               | Jitter |
+| -------------------------- | ---------- | ---------- | --------------------- | ------ |
+| Exponencial (DB, Consumer) | 3          | 100ms      | 100ms → 200ms → 400ms | ✅     |
+| Lineal rápido (API)        | 2          | 50ms       | 50ms → 50ms           | ❌     |
+
+#### ¿Qué errores reintentar?
+
+| Reintentar ✅           | No reintentar ❌                   |
+| ----------------------- | ---------------------------------- |
+| Timeout de conexión     | Constraint violations (UNIQUE, FK) |
+| Connection refused      | Saldo insuficiente (400)           |
+| Conflicto de bloqueo DB | Datos inválidos (400)              |
+| 503 Service Unavailable | 401/403 Unauthorized               |
+| 429 Too Many Requests   | 404 Not Found                      |
+
+#### ¿Por qué jitter en backoff exponencial?
+
+Sin jitter, si un servicio cae y 1000 clientes esperan exactamente 100ms para reintentar, todos golpean al servidor simultáneamente al recuperarse ("thundering herd"). El jitter añade variación aleatoria (ej: 100-150ms) para distribuir los reintentos en el tiempo y evitar sobrecargar el servicio recién recuperado.
+
+### Dead Letter Queue
+
+Mensajes que fallan después de 3 reintentos van a `payments.dead-letter` para análisis manual.
+
+### Transacciones Compensatorias
+
+| Falla                         | Compensación            |
+| ----------------------------- | ----------------------- |
+| Gateway rechaza               | Release funds           |
+| Gateway timeout (max retries) | Release funds           |
+| Consumer crash                | Recovery job re-procesa |
+
+---
+
+## Circuit Breaker (No Implementado)
+
+> **Nota:** Esta sección documenta cómo funcionaría el patrón Circuit Breaker en el sistema. No está implementado en el challenge actual, pero se incluye como referencia arquitectónica.
+
+### ¿Qué es un Circuit Breaker?
+
+Un **Circuit Breaker** funciona como un interruptor eléctrico: si detecta que un servicio externo está fallando repetidamente, **corta las llamadas temporalmente** para evitar saturar al servicio caído y proteger nuestro sistema.
+
+```
+Sin Circuit Breaker:
+┌─────────────────────────────────────────────────────────────────┐
+│  Request 1 → Timeout (5s) → Request 2 → Timeout (5s) → ...     │
+│  Tu servicio se queda esperando → Threads bloqueados → Colapso │
+└─────────────────────────────────────────────────────────────────┘
+
+Con Circuit Breaker:
+┌─────────────────────────────────────────────────────────────────┐
+│  5 errores consecutivos → Circuit ABRE → Fallo inmediato (ms)  │
+│  Tu servicio responde rápido → Recursos liberados → Estable    │
+└─────────────────────────────────────────────────────────────────┘
+```
+
+### Los 3 Estados
+
+```
+┌──────────────────────────────────────────────────────────────────────────┐
+│                                                                          │
+│   ┌──────────┐       5 errores consecutivos      ┌──────────┐           │
+│   │  CLOSED  │ ─────────────────────────────────▶│   OPEN   │           │
+│   │ (Normal) │                                   │(Bloqueado)│           │
+│   └────┬─────┘                                   └─────┬─────┘           │
+│        │                                               │                 │
+│        │ ◀─────────── Éxito ──────────┐          30 segundos            │
+│        │                              │               │                  │
+│        │                       ┌──────┴─────┐        │                  │
+│        │                       │ HALF-OPEN  │◀───────┘                  │
+│        │                       │ (Probando) │                           │
+│        │                       └──────┬─────┘                           │
+│        │                              │                                  │
+│        │                         Si falla → Vuelve a OPEN               │
+│                                                                          │
+└──────────────────────────────────────────────────────────────────────────┘
+```
+
+| Estado        | Descripción                   | Comportamiento                                |
+| ------------- | ----------------------------- | --------------------------------------------- |
+| **CLOSED**    | Funcionamiento normal         | Todas las requests pasan al servicio          |
+| **OPEN**      | Servicio detectado como caído | Rechaza inmediatamente (no llama)             |
+| **HALF-OPEN** | Período de prueba             | Permite 1 request para verificar recuperación |
+
+### Aplicación en el Sistema
+
+El sistema requiere **2 Circuit Breakers independientes**:
+
+| Circuit Breaker | Protege llamadas a                         | Usado por      |
+| --------------- | ------------------------------------------ | -------------- |
+| **CB Wallet**   | Wallet Service (Reserve, Confirm, Release) | API + Consumer |
+| **CB Gateway**  | Gateway Externo (Process)                  | Consumer       |
+
+Cada uno tiene su propio estado y configuración, permitiendo que uno esté abierto mientras el otro funciona normalmente.
+
+#### Escenario 1 - CB Wallet: API (Payment API → Wallet Service)
+
+Cuando el cliente intenta crear un pago:
+
+```
+Cliente                Payment API              Circuit Breaker           Wallet Service
+   │                       │                          │                        │
+   │ POST /payments        │                          │                        │
+   │──────────────────────▶│                          │                        │
+   │                       │ Reserve()                │                        │
+   │                       │─────────────────────────▶│ ← OPEN                 │
+   │                       │◀─────────────────────────│                        │
+   │                       │ Error: "circuit open"    │                        │
+   │◀──────────────────────│                          │                        │
+   │ 503 Service Unavailable                          │                        │
+```
+
+**Acción:** Fallar inmediatamente. No crear pago si no podemos reservar fondos.
+
+```go
+func (s *Service) Create(req CreateRequest) (*Payment, error) {
+    err := s.walletClient.Reserve(ctx, req.UserID, req.Amount)
+
+    if errors.Is(err, ErrCircuitOpen) {
+        return nil, ErrServiceUnavailable  // HTTP 503
+    }
+
+    // Solo continuar si Reserve() fue exitoso
+    // ...
+}
+```
+
+#### Escenario 2 - CB Wallet: Consumer (Consumer → Wallet Service)
+
+Cuando el consumer necesita confirmar/liberar fondos:
+
+```
+┌─────────────────────────────────────────────────────────────────────────────┐
+│                    Consumer + Circuit Breaker                               │
+│                                                                             │
+│  Mensaje llega                                                              │
+│       │                                                                     │
+│       ▼                                                                     │
+│  Gateway OK ✅                                                              │
+│       │                                                                     │
+│       ▼                                                                     │
+│  Wallet.Confirm()                                                           │
+│       │                                                                     │
+│       ├──────────────────────────────────────┐                              │
+│       ▼                                      ▼                              │
+│  Circuit CLOSED                        Circuit OPEN                         │
+│       │                                      │                              │
+│       ▼                                      ▼                              │
+│  Wallet responde                     ¿Retry count < 3?                      │
+│       │                               │            │                        │
+│       ▼                              YES          NO                        │
+│    ACK ✅                             │            │                        │
+│  (completed)                          ▼            ▼                        │
+│                                 NACK+Requeue   NACK → DLQ                   │
+│                                 (reintenta)    + estado "pending_confirm"   │
+│                                                       │                     │
+│                                                       ▼                     │
+│                                               Recovery Job                  │
+│                                               lo retoma después             │
+└─────────────────────────────────────────────────────────────────────────────┘
+```
+
+**Acción:** Reencolar con límite de reintentos.
+
+```go
+func (h *Handler) HandleMessage(msg amqp.Delivery) {
+    // Gateway ya procesó OK
+    gatewayRef, _ := h.gateway.Process(payment)
+
+    // Intentar confirmar en Wallet
+    err := h.walletClient.Confirm(ctx, payment.UserID, payment.Amount)
+
+    if errors.Is(err, ErrCircuitOpen) {
+        retryCount := getRetryCount(msg.Headers)
+
+        if retryCount >= 3 {
+            // Máximo de reintentos → DLQ + estado intermedio
+            h.repo.UpdateStatus(payment.ID, "pending_confirm", gatewayRef)
+            msg.Nack(false, false)  // → DLQ
+            return
+        }
+
+        // Reencolar para reintentar
+        msg.Nack(false, true)  // → Requeue
+        return
+    }
+
+    // Éxito
+    h.repo.UpdateStatus(payment.ID, "completed", gatewayRef)
+    msg.Ack(false)
+}
+```
+
+#### Escenario 3 - CB Gateway: Consumer (Consumer → Gateway Externo)
+
+Cuando el consumer intenta procesar el pago con el gateway externo:
+
+```
+RabbitMQ                 Consumer              Circuit Breaker             Gateway
+   │                        │                        │                        │
+   │ Deliver message        │                        │                        │
+   │───────────────────────▶│                        │                        │
+   │                        │ gateway.Process()      │                        │
+   │                        │───────────────────────▶│ ← OPEN                 │
+   │                        │◀───────────────────────│                        │
+   │                        │ Error: "circuit open"  │                        │
+   │                        │                        │                        │
+   │      ¿QUÉ HACEMOS?     │                        │                        │
+```
+
+**Diferencia clave con Wallet:** Si el Gateway falla, los fondos **aún están reservados**. Debemos decidir si reintentamos o liberamos.
+
+```
+┌─────────────────────────────────────────────────────────────────────────────┐
+│                Consumer + Gateway Circuit Breaker                           │
+│                                                                             │
+│  Mensaje llega                                                              │
+│       │                                                                     │
+│       ▼                                                                     │
+│  Gateway.Process()                                                          │
+│       │                                                                     │
+│       ├──────────────────────────────────────┐                              │
+│       ▼                                      ▼                              │
+│  Circuit CLOSED                        Circuit OPEN                         │
+│       │                                      │                              │
+│       │                                      ▼                              │
+│       │                              ¿Retry count < 3?                      │
+│       │                               │            │                        │
+│       ▼                              YES          NO                        │
+│  Gateway responde                     │            │                        │
+│       │                               ▼            ▼                        │
+│       ├───────────┐            NACK+Requeue   Wallet.Release()              │
+│       ▼           ▼            (reintenta)    + status = "failed"           │
+│   Gateway OK   Gateway Error        │            │                          │
+│       │           │                 │            ▼                          │
+│       ▼           ▼                 │        NACK → DLQ                     │
+│  Wallet.Confirm  Wallet.Release     │                                       │
+│  status=completed status=failed     │                                       │
+│       │           │                 │                                       │
+│       ▼           ▼                 │                                       │
+│    ACK ✅      ACK ✅               │                                       │
+└─────────────────────────────────────────────────────────────────────────────┘
+```
+
+**Acción:** Reencolar con límite, luego liberar fondos y fallar.
+
+```go
+func (h *Handler) HandleMessage(msg amqp.Delivery) {
+    payment := parsePayment(msg)
+
+    // Intentar procesar en Gateway (protegido por circuit breaker)
+    gatewayRef, err := h.gateway.Process(ctx, payment)
+
+    if errors.Is(err, ErrCircuitOpen) {
+        retryCount := getRetryCount(msg.Headers)
+
+        if retryCount >= 3 {
+            // Máximo de reintentos → liberar fondos y fallar
+            h.walletClient.Release(ctx, payment.UserID, payment.Amount, payment.ID)
+            h.repo.UpdateStatus(payment.ID, "failed", "gateway_unavailable")
+            msg.Nack(false, false)  // → DLQ
+            return
+        }
+
+        // Reencolar para reintentar (fondos siguen reservados)
+        msg.Nack(false, true)  // → Requeue
+        return
+    }
+
+    if err != nil {
+        // Gateway respondió con error (no circuit breaker)
+        h.walletClient.Release(ctx, payment.UserID, payment.Amount, payment.ID)
+        h.repo.UpdateStatus(payment.ID, "failed", err.Error())
+        msg.Ack(false)
+        return
+    }
+
+    // Gateway OK → confirmar fondos
+    h.walletClient.Confirm(ctx, payment.UserID, payment.Amount, payment.ID)
+    h.repo.UpdateStatus(payment.ID, "completed", gatewayRef)
+    msg.Ack(false)
+}
+```
+
+### Comparación: Fallo en Gateway vs Fallo en Wallet
+
+| Aspecto                         | Gateway Falla            | Wallet Falla (Confirm)  |
+| ------------------------------- | ------------------------ | ----------------------- |
+| **Estado de fondos**            | Reservados               | Reservados              |
+| **¿Pago procesado?**            | No                       | Sí (Gateway OK)         |
+| **Compensación**                | Release (liberar fondos) | No hay (ya se cobró)    |
+| **Estado final si max retries** | `failed`                 | `pending_confirm`       |
+| **Recovery**                    | No necesario (ya falló)  | Sí (reintentar confirm) |
+
+**¿Por qué la diferencia?**
+
+- **Gateway falla:** El pago nunca se procesó, podemos liberar fondos y fallar limpiamente.
+- **Wallet falla (después de Gateway OK):** El dinero ya se cobró en el gateway, **no podemos liberar**. Debemos reintentar el confirm indefinidamente o escalar manualmente.
+
+### Estado Intermedio: `pending_confirm`
+
+Cuando el Gateway aceptó el pago pero no podemos confirmar en Wallet:
+
+```
+Estados del pago (con Circuit Breaker):
+
+┌─────────┐    ┌──────────┐    ┌─────────────────┐    ┌───────────┐
+│ pending │───▶│ reserved │───▶│ pending_confirm │───▶│ completed │
+└─────────┘    └──────────┘    └─────────────────┘    └───────────┘
+                                       │
+                                       │ Recovery Job
+                                       │ retoma cuando Wallet
+                                       │ esté disponible
+                                       │
+                                       └──────▶ completed
+```
+
+### Configuración Típica
+
+| Parámetro              | Valor       | Descripción                     |
+| ---------------------- | ----------- | ------------------------------- |
+| **Threshold**          | 5 errores   | Errores consecutivos para abrir |
+| **Timeout**            | 30 segundos | Tiempo en estado OPEN           |
+| **Half-Open Requests** | 1           | Requests de prueba permitidas   |
+
+### Resumen de Comportamiento
+
+| Componente   | Escenario                 | Circuit Breaker Abierto | Acción                      |
+| ------------ | ------------------------- | ----------------------- | --------------------------- |
+| **API**      | Crear pago                | Wallet no disponible    | Fallar inmediatamente (503) |
+| **Consumer** | Gateway: retry < 3        | Gateway no disponible   | NACK + Requeue              |
+| **Consumer** | Gateway: retry ≥ 3        | Gateway sigue caído     | Release + failed + DLQ      |
+| **Consumer** | Wallet Confirm: retry < 3 | Wallet no disponible    | NACK + Requeue              |
+| **Consumer** | Wallet Confirm: retry ≥ 3 | Wallet sigue caído      | `pending_confirm` + DLQ     |
+| **Recovery** | Detecta `pending_confirm` | N/A                     | Reintenta confirmar         |
+
+### Librerías Recomendadas (Go)
+
+- **sony/gobreaker**: Simple y efectiva
+- **afex/hystrix-go**: Port de Hystrix de Netflix
+- **resilience4j** (Java): Si el sistema migra a JVM
+
+---
+
+## Recuperación del Sistema (Scheduled Jobs)
+
+Cuando el sistema se reinicia o un consumer crashea, pueden quedar pagos en estados intermedios ("huérfanos"). En estos casos usamos **Scheduled Jobs** para detectar estas inconsistencias y resolverlas automáticamente.
+
+### Escenarios que Requieren Recuperación
+
+| Escenario                  | Estado huérfano | Consecuencia                      |
+| -------------------------- | --------------- | --------------------------------- |
+| Consumer crash mid-process | `reserved`      | Fondos bloqueados indefinidamente |
+| Mensaje perdido en cola    | `reserved`      | Pago nunca se completa            |
+| DB commit pero ACK falla   | `completed`     | Mensaje se re-procesa (duplicado) |
+| Sistema se reinicia        | `reserved`      | Pagos pendientes sin procesar     |
+
+### Arquitectura de Recuperación
+
+Los jobs solo **detectan** pagos huérfanos y los publican en colas de recovery. Consumers dedicados **resuelven** los casos 1 a 1. Este enfoque mantiene consistencia arquitectónica (todo es event-driven), escala horizontalmente con N consumers, y es resiliente a fallas (si un consumer falla, el mensaje vuelve a la cola).
+
+```
+┌─────────────────┐     ┌─────────────────┐     ┌─────────────────┐
+│  Recovery Job   │────▶│   PostgreSQL    │     │ Recovery Queue  │
+│  (cada 5 min)   │     │  (busca stuck)  │     │ payments.recovery│
+└─────────────────┘     └─────────────────┘     └────────┬────────┘
+        │                                                 │
+        └── Publica en cola ─────────────────────────────▶│
+                                                          │
+                                               ┌──────────▼──────────┐
+                                               │  Recovery Consumer  │
+                                               │  (N workers)        │
+                                               │  - Release funds    │
+                                               │  - Update status    │
+                                               └─────────────────────┘
+```
+
+### Arquitectura de Jobs
+
+```
+┌─────────────────────────────────────────────────────────────────────────────┐
+│                         Scheduled Jobs + Recovery Queues                     │
+│                                                                              │
+│  JOBS (solo detectan y publican)                                            │
+│  ┌─────────────────┐  ┌─────────────────┐  ┌─────────────────┐             │
+│  │  Recovery Job   │  │  Expiration Job │  │   DLQ Processor │             │
+│  │  (cada 5 min)   │  │  (cada 1 min)   │  │  (cada 10 min)  │             │
+│  └────────┬────────┘  └────────┬────────┘  └────────┬────────┘             │
+│           │                    │                    │                       │
+│           ▼                    ▼                    ▼                       │
+│  ┌─────────────────────────────────────────────────────────────┐           │
+│  │                       PostgreSQL                             │           │
+│  │   SELECT * FROM payments WHERE status = 'reserved'           │           │
+│  │   AND updated_at < NOW() - INTERVAL '10 minutes'             │           │
+│  └─────────────────────────────────────────────────────────────┘           │
+│           │                    │                    │                       │
+│           ▼                    ▼                    ▼                       │
+│  COLAS (procesan 1 a 1)                                                     │
+│  ┌─────────────────┐  ┌─────────────────┐  ┌─────────────────┐             │
+│  │ payments.recovery│ │ payments.expire │  │ payments.dlq    │             │
+│  │ (N consumers)   │  │ (N consumers)   │  │ .reprocess      │             │
+│  └────────┬────────┘  └────────┬────────┘  └────────┬────────┘             │
+│           │                    │                    │                       │
+│           ▼                    ▼                    ▼                       │
+│  CONSUMERS (resuelven)                                                      │
+│  - Re-procesar pago    - Liberar fondos      - Retry, Fail,                │
+│  - O marcar failed     - Marcar expired        o Alertar                   │
+└─────────────────────────────────────────────────────────────────────────────┘
+```
+
+### Tipos de Jobs
+
+#### 1. Recovery Job (Orphan Cleanup)
+
+**Responsabilidad:** Detectar pagos "stuck" en `reserved` por más de X minutos y publicarlos en la cola de recovery.
+
+**Frecuencia:** Cada 5 minutos
+
+**Query:**
+
+```sql
+SELECT * FROM payments
+WHERE status = 'reserved'
+  AND updated_at < NOW() - INTERVAL '10 minutes'
+ORDER BY updated_at ASC
+LIMIT 100;
+```
+
+**Flujo:**
+
+1. Job ejecuta query para encontrar huérfanos
+2. Para cada huérfano, publica mensaje en `payments.recovery`
+3. Recovery Consumer recibe el mensaje
+4. Consumer intenta re-procesar o marca como `failed` + libera fondos
+
+#### 2. Expiration Job (TTL Enforcement)
+
+**Responsabilidad:** Detectar pagos que exceden el tiempo máximo permitido y publicarlos para expiración.
+
+**Frecuencia:** Cada 1 minuto
+
+**Query:**
+
+```sql
+SELECT * FROM payments
+WHERE status = 'reserved'
+  AND updated_at < NOW() - INTERVAL '15 minutes'
+ORDER BY updated_at ASC
+LIMIT 100;
+```
+
+**Flujo:**
+
+1. Job encuentra pagos que excedieron TTL
+2. Publica en `payments.expire`
+3. Expiration Consumer libera fondos y marca como `expired`
+
+#### 3. DLQ Processor
+
+**Responsabilidad:** Revisar mensajes en Dead Letter Queue y clasificarlos para acción.
+
+**Frecuencia:** Cada 10 minutos
+
+**Acciones según tipo de error:**
+
+| Tipo de Error | Acción                              |
+| ------------- | ----------------------------------- |
+| Transient     | Re-encolar en `payments.dlq.retry`  |
+| Permanent     | Marcar como `failed`, no reintentar |
+| Unknown       | Alertar para revisión manual        |
+
+### Colas de Recovery
+
+```
+├── payments.created        # Flujo principal
+├── payments.dead-letter    # Mensajes fallidos (DLQ)
+├── payments.recovery       # Pagos huérfanos para re-procesar
+├── payments.expire         # Pagos para expirar
+└── payments.dlq.retry      # DLQ messages para reintentar
+```
+
+### Estados del Ciclo de Vida
+
+```
+┌─────────┐    reserve    ┌──────────┐    gateway OK    ┌───────────┐
+│ pending │──────────────▶│ reserved │─────────────────▶│ completed │
+└─────────┘               └──────────┘                  └───────────┘
+                               │
+              ┌────────────────┼────────────────┐
+              │                │                │
+              ▼                ▼                ▼
+         ┌─────────┐     ┌─────────┐      ┌─────────┐
+         │ expired │     │ failed  │      │ (retry) │
+         │ (TTL)   │     │ (error) │      │         │
+         └─────────┘     └─────────┘      └────┬────┘
+                                               │
+                                               └──▶ reserved (re-procesado)
+```
+
+### Configuración de Schedules
+
+| Job            | Intervalo | Timeout pagos | Batch size | Cola destino       |
+| -------------- | --------- | ------------- | ---------- | ------------------ |
+| Recovery Job   | 5 min     | 10 min        | 100        | payments.recovery  |
+| Expiration Job | 1 min     | 15 min        | 100        | payments.expire    |
+| DLQ Processor  | 10 min    | N/A           | 50         | payments.dlq.retry |
+
+### Alternativas de Scheduling
+
+| Opción                  | Pros                             | Contras               | Cuándo usar            |
+| ----------------------- | -------------------------------- | --------------------- | ---------------------- |
+| **In-process (gocron)** | Simple, mismo deploy             | Muere con la app      | Apps pequeñas/medianas |
+| **Kubernetes CronJob**  | Aislado, escalable               | Necesita K8s          | Ya usas Kubernetes     |
+| **AWS EventBridge**     | Serverless, no mantener infra    | Vendor lock-in        | Apps en AWS            |
+| **Temporal/Cadence**    | Workflows complejos, durabilidad | Complejidad adicional | Sagas complejas        |
+
+### Garantías
+
+1. **Idempotencia:** Los consumers verifican el estado actual antes de actuar. Si el pago ya fue procesado (`completed`, `failed`, `expired`), se ignora el mensaje.
+
+2. **At-least-once:** Si el consumer falla antes del ACK, el mensaje vuelve a la cola y se reprocesa.
+
+3. **Ordenamiento:** No se garantiza orden. Cada mensaje es independiente y se procesa individualmente.
+
+### Métricas Importantes
+
+| Métrica                          | Descripción                        | Alerta si      |
+| -------------------------------- | ---------------------------------- | -------------- |
+| `orphan_payments_found_total`    | Pagos huérfanos detectados por job | > 100 en 5 min |
+| `recovery_processed_total`       | Pagos recuperados exitosamente     | N/A            |
+| `recovery_failed_total`          | Pagos que no pudieron recuperarse  | > 10%          |
+| `job_execution_duration_seconds` | Tiempo de ejecución del job        | > 60 seg       |
+
+---
+
+## Concurrencia e Idempotencia
+
+Protecciones a nivel de API y negocio para evitar operaciones duplicadas y race conditions.
+
+### 1. Idempotency Key (API)
+
+El cliente envía `Idempotency-Key` en el header HTTP para evitar pagos duplicados:
+
+```
+POST /api/v1/payments
+Headers:
+  Idempotency-Key: "order-123-uuid"
+Body:
+{
+    "user_id": "usr_123",
+    "amount": 100.0,
+    "currency": "USD"
+}
+```
+
+**Implementación:** Handler extrae el header y lo pasa al service como parámetro separado:
+
+```go
+// creator/handler.go
+func (h *Handler) Create(c *gin.Context) {
+    ctx := c.Request.Context()
+
+    idempotencyKey := c.GetHeader("Idempotency-Key")
+    if idempotencyKey == "" {
+        c.JSON(http.StatusBadRequest, gin.H{"error": "Idempotency-Key header is required"})
+        return
+    }
+
+    var req PaymentRequest
+    json.NewDecoder(c.Request.Body).Decode(&req)
+
+    payment, err := h.service.Create(ctx, idempotencyKey, &req)
+    // ...
+}
+
+// creator/service.go
+func (s *Service) Create(ctx context.Context, idempotencyKey string, req *PaymentRequest) (*Payment, error) {
+    // Step 1: Check if payment already exists
+    existing, err := s.storer.GetByIdempotencyKey(ctx, idempotencyKey)
+    if err != nil {
+        return nil, fmt.Errorf("failed to check idempotency: %w", err)
+    }
+    if existing != nil {
+        return existing, nil  // Return existing payment
+    }
+
+    // Step 2: Create new payment
+    payment := NewPayment(idempotencyKey, req.UserID, req.Amount, req.Currency)
+
+    if err := s.storer.Save(ctx, payment); err != nil {
+        return nil, fmt.Errorf("failed to save payment: %w", err)
+    }
+
+    // Continue with reserve, update status, publish...
+    return payment, nil
+}
+```
+
+**Flujo:**
+
+```
+Request 1: Idempotency-Key: "abc123"
+├─ Check: GetByIdempotencyKey("abc123") → nil
+├─ Create + Save payment
+└─ Retornar 201
+
+Request 2: Idempotency-Key: "abc123" (retry)
+├─ Check: GetByIdempotencyKey("abc123") → existing payment
+└─ Retornar existing payment (201)
+```
+
+**Beneficios:**
+
+- Header estándar para idempotencia (patrón común en APIs)
+- Separación clara: header para control, body para datos
+- Lógica explícita y fácil de testear
+
+### 2. Idempotencia en Consumer
+
+El `payment_id` es el idempotency key natural. Mensajes duplicados se ignoran silenciosamente:
+
+```go
+// processor/service.go
+func (s *Service) Process(ctx context.Context, payment *Payment) error {
+    existing, _ := s.repo.GetByID(ctx, payment.ID)
+
+    switch existing.Status {
+    case domain.StatusCompleted, domain.StatusFailed:
+        return nil  // Ya procesado, skip silencioso + ACK
+    case domain.StatusReserved:
+        return s.processPayment(ctx, payment)
+    default:
+        return nil  // Estado inesperado, skip + ACK
+    }
+}
+```
+
+**Nota:** No se envían duplicados a DLQ. DLQ es solo para errores de procesamiento.
+
+### 3. Optimistic Locking (Wallet)
+
+Previene race conditions usando el campo `version`:
+
+```sql
+UPDATE wallets
+SET available_balance = available_balance - 80,
+    reserved_balance = reserved_balance + 80,
+    version = version + 1
+WHERE user_id = ?
+  AND version = ?              -- Verifica que nadie más modificó
+  AND available_balance >= 80; -- Validación atómica
+
+-- Si affected_rows = 0 → conflict o saldo insuficiente
+```
+
+### 4. Resumen de Protecciones
+
+| Capa     | Problema                  | Solución                            |
+| -------- | ------------------------- | ----------------------------------- |
+| API      | Doble clic, retry cliente | Idempotency Key header              |
+| Wallet   | Race condition            | Optimistic Locking (version)        |
+| Consumer | Mensaje duplicado         | Check status, skip si ya procesado  |
+| DB       | Saldo negativo            | Constraint `available_balance >= 0` |
+
+---
+
+## Stack Tecnológico
+
+| Componente     | Tecnología             | Justificación                          |
+| -------------- | ---------------------- | -------------------------------------- |
+| Lenguaje       | Go 1.21+               | Performance, concurrencia              |
+| Web Framework  | Gin                    | Ligero, rápido                         |
+| Message Broker | RabbitMQ               | ACK nativo, DLQ, simple                |
+| Base de Datos  | PostgreSQL             | ACID, JSONB, transacciones, CQRS ready |
+| Logging        | slog                   | Structured, stdlib                     |
+| Observabilidad | OpenTelemetry + Jaeger | Traces distribuidos, métricas          |
+
+---
+
+## Caché (Redis)
+
+### Qué Cachear
+
+| Endpoint                        | Cachear | TTL  | Justificación                                               |
+| ------------------------------- | ------- | ---- | ----------------------------------------------------------- |
+| `GET /wallets/:user_id/balance` | ✅      | 30s  | Alta frecuencia de consulta, tolera datos ligeramente stale |
+| `GET /payments/:id`             | ✅      | 5min | Pagos completados/fallidos son inmutables                   |
+| `POST /wallets/reserve`         | ❌      | —    | Operación de escritura, requiere consistencia fuerte        |
+| `POST /wallets/confirm`         | ❌      | —    | Operación de escritura crítica                              |
+
+### Estructura de Keys
+
+```
+wallet:balance:{user_id}     → {"available": 150.00, "reserved": 50.00}
+payment:{payment_id}         → {payment completo en JSON}
+```
+
+### Estrategia de Invalidación
+
+**Patrón:** Cache-Aside con invalidación en escritura.
+
+```
+┌─────────────────────────────────────────────────────────────────┐
+│  LECTURA (Cache-Aside)                                          │
+│                                                                 │
+│  1. Buscar en Redis                                             │
+│  2. Si existe → retornar (cache hit)                            │
+│  3. Si no existe → consultar DB → guardar en Redis → retornar   │
+└─────────────────────────────────────────────────────────────────┘
+
+┌─────────────────────────────────────────────────────────────────┐
+│  ESCRITURA (Invalidación)                                       │
+│                                                                 │
+│  1. Escribir en DB                                              │
+│  2. DELETE key en Redis (no SET)                                │
+│  3. Próxima lectura reconstruye el caché                        │
+└─────────────────────────────────────────────────────────────────┘
+```
+
+**¿Por qué DELETE y no SET?** Evita race conditions donde el caché queda con datos viejos si otra escritura ocurre entre el write a DB y el SET a Redis.
+
+### Invalidación por Operación
+
+| Operación                  | Acción en Redis                                                  |
+| -------------------------- | ---------------------------------------------------------------- |
+| Reserve                    | `DEL wallet:balance:{user_id}`                                   |
+| Confirm                    | `DEL wallet:balance:{user_id}`                                   |
+| Release                    | `DEL wallet:balance:{user_id}`                                   |
+| Refund                     | `DEL wallet:balance:{user_id}`                                   |
+| Payment completado/fallido | `DEL payment:{payment_id}` (opcional, ya que el estado es final) |
+
+### Implementación
+
+```go
+// wallet/service.go
+func (s *Service) GetBalance(ctx context.Context, userID string) (*Balance, error) {
+    key := fmt.Sprintf("wallet:balance:%s", userID)
+
+    // 1. Intentar desde caché
+    cached, err := s.redis.Get(ctx, key).Result()
+    if err == nil {
+        var balance Balance
+        json.Unmarshal([]byte(cached), &balance)
+        return &balance, nil
+    }
+
+    // 2. Consultar DB
+    balance, err := s.repo.GetBalance(ctx, userID)
+    if err != nil {
+        return nil, err
+    }
+
+    // 3. Guardar en caché
+    data, _ := json.Marshal(balance)
+    s.redis.Set(ctx, key, data, 30*time.Second)
+
+    return balance, nil
+}
+
+func (s *Service) Reserve(ctx context.Context, userID string, amount float64) error {
+    // 1. Escribir en DB
+    if err := s.repo.Reserve(ctx, userID, amount); err != nil {
+        return err
+    }
+
+    // 2. Invalidar caché
+    key := fmt.Sprintf("wallet:balance:%s", userID)
+    s.redis.Del(ctx, key)
+
+    return nil
+}
+```
+
+### Configuración
+
+```env
+# Wallet Service (.env)
+REDIS_URL=redis://localhost:6379
+CACHE_BALANCE_TTL=30s
+CACHE_PAYMENT_TTL=5m
+```
+
+### Métricas de Caché
+
+| Métrica            | Descripción               | Alerta si  |
+| ------------------ | ------------------------- | ---------- |
+| `cache_hit_ratio`  | Hits / (Hits + Misses)    | No alerta  |
+| `cache_latency_ms` | Tiempo de respuesta Redis | P99 > 10ms |
+
+> **Nota:** El caché no está implementado en el challenge. Se documenta como mejora de performance para producción.
+
+---
+
+## Configuración
+
+### Payment Service (.env)
+
+```env
+PORT=3000
+DATABASE_URL=postgres://user:pass@localhost:5432/payments?sslmode=disable
+RABBITMQ_URL=amqp://guest:guest@localhost:5672/
+WALLET_SERVICE_URL=http://wallet-vm:3001
+JAEGER_ENDPOINT=http://jaeger.railway.internal:14268/api/traces
+SERVICE_NAME=payment-service
+```
+
+### Wallet Service (.env)
+
+```env
+PORT=3001
+DATABASE_URL=postgres://user:pass@localhost:5432/wallets?sslmode=disable
+JAEGER_ENDPOINT=http://jaeger.railway.internal:14268/api/traces
+SERVICE_NAME=wallet-service
+```
+
+---
+
+## Health Checks
+
+```
+GET /health
+GET /health/ready
+GET /health/live
+```
+
+```json
+{
+  "status": "healthy",
+  "checks": {
+    "database": "ok",
+    "rabbitmq": "ok"
+  }
+}
+```
+
+---
+
+## Observabilidad (OpenTelemetry + Jaeger)
+
+### Arquitectura
+
+```
+┌─────────────────┐     ┌─────────────────┐     ┌─────────────────┐
+│ Payment Service │     │ Wallet Service  │     │    Consumer     │
+│  [OTel SDK]     │     │  [OTel SDK]     │     │  [OTel SDK]     │
+└────────┬────────┘     └────────┬────────┘     └────────┬────────┘
+         │                       │                       │
+         └───────────────────────┼───────────────────────┘
+                                 │ traces + metrics
+                                 ▼
+                    ┌─────────────────────────┐
+                    │     Jaeger (Railway)    │
+                    │     Port 16686 (UI)     │
+                    └─────────────────────────┘
+```
+
+### Configuración
+
+```env
+# Agregar a ambos servicios
+JAEGER_ENDPOINT=http://jaeger.railway.internal:14268/api/traces
+SERVICE_NAME=payment-service  # o wallet-service
+```
+
+### HTTP (Automático con Middleware)
+
+```go
+import "go.opentelemetry.io/contrib/instrumentation/github.com/gin-gonic/gin/otelgin"
+
+func StartRouter(db *sql.DB, httpClient *http.Client) {
+    router := gin.New()
+    router.Use(otelgin.Middleware("payment-service"))  // Traces + Metrics automáticos
+    // ...
+}
+```
+
+**Captura automáticamente:** latencia, request count, status codes, traces por request.
+
+### Consumer (Manual)
+
+```go
+// 1. Propagar trace context en el mensaje (al publicar)
+func (p *Publisher) Publish(ctx context.Context, payment *Payment) error {
+    carrier := make(map[string]string)
+    otel.GetTextMapPropagator().Inject(ctx, propagation.MapCarrier(carrier))
+
+    msg := amqp.Publishing{
+        Headers: amqp.Table{"trace_parent": carrier["traceparent"]},
+        Body:    paymentJSON,
+    }
+    return p.channel.Publish(msg)
+}
+
+// 2. Extraer y continuar trace (al consumir)
+func (h *Handler) HandleMessage(msg amqp.Delivery) error {
+    carrier := propagation.MapCarrier{"traceparent": msg.Headers["trace_parent"].(string)}
+    ctx := otel.GetTextMapPropagator().Extract(context.Background(), carrier)
+
+    ctx, span := otel.Tracer("consumer").Start(ctx, "ProcessPayment")
+    defer span.End()
+
+    span.SetAttributes(attribute.String("payment_id", payment.ID))
+
+    return h.service.Process(ctx, payment)
+}
+```
+
+### Métricas del Consumer
+
+```go
+var (
+    messagesProcessed = otel.Meter("consumer").Int64Counter("messages_processed_total")
+    duplicateMessages = otel.Meter("consumer").Int64Counter("duplicate_messages_total")
+    processingDuration = otel.Meter("consumer").Float64Histogram("processing_duration_ms")
+)
+
+func (s *Service) Process(ctx context.Context, payment *Payment) error {
+    start := time.Now()
+    defer func() {
+        processingDuration.Record(ctx, float64(time.Since(start).Milliseconds()))
+        messagesProcessed.Add(ctx, 1)
+    }()
+
+    if existing.Status == domain.StatusCompleted || existing.Status == domain.StatusFailed {
+        duplicateMessages.Add(ctx, 1)
+        return nil
+    }
+    // ...
+}
+```
+
+### Alerta de Duplicados
+
+| Threshold | Severidad | Acción           |
+| --------- | --------- | ---------------- |
+| > 10%     | Warning   | Investigar       |
+| > 30%     | Critical  | Alerta inmediata |
+
+---
+
+### Métricas de Negocio
+
+Métricas orientadas a KPIs de negocio, complementarias a las métricas técnicas.
+
+#### Payment Service
+
+| Métrica                    | Tipo      | Labels               | Descripción                  |
+| -------------------------- | --------- | -------------------- | ---------------------------- |
+| `payments_total`           | Counter   | `status`, `currency` | Total de pagos por estado    |
+| `payment_duration_seconds` | Histogram | `status`             | Tiempo end-to-end del pago   |
+| `gateway_latency_seconds`  | Histogram | `status`             | Latencia del gateway externo |
+
+#### Wallet Service
+
+| Métrica                           | Tipo    | Labels | Descripción                           |
+| --------------------------------- | ------- | ------ | ------------------------------------- |
+| `wallet_operations_total`         | Counter | `type` | Operaciones (reserve/confirm/release) |
+| `wallet_insufficient_funds_total` | Counter | —      | Rechazos por saldo insuficiente       |
+
+#### Consumer
+
+| Métrica                    | Tipo    | Descripción                          |
+| -------------------------- | ------- | ------------------------------------ |
+| `messages_processed_total` | Counter | Mensajes procesados                  |
+| `duplicate_messages_total` | Counter | Duplicados detectados (idempotencia) |
+| `dlq_messages_total`       | Counter | Mensajes enviados a DLQ              |
+
+#### Tasas Derivadas (Dashboard)
+
+Calculadas en Grafana/Prometheus a partir de los counters:
+
+```promql
+# Tasa de éxito (últimos 5 min)
+sum(rate(payments_total{status="completed"}[5m])) / sum(rate(payments_total[5m]))
+
+# Tasa de fallo
+sum(rate(payments_total{status="failed"}[5m])) / sum(rate(payments_total[5m]))
+```
+
+#### Ejemplo de Implementación
+
+```go
+// creator/service.go - Al crear pago
+func (s *Service) Create(ctx context.Context, req CreateRequest) (*Payment, error) {
+    start := time.Now()
+    defer func() {
+        paymentDuration.Record(ctx, time.Since(start).Seconds(),
+            attribute.String("status", payment.Status))
+    }()
+
+    // ... lógica de creación ...
+
+    paymentsTotal.Add(ctx, 1,
+        attribute.String("status", payment.Status),
+        attribute.String("currency", payment.Currency))
+
+    return payment, nil
+}
+```
+
+#### Alertas de Negocio
+
+| Condición                    | Severidad | Acción              |
+| ---------------------------- | --------- | ------------------- |
+| Tasa de fallo > 5%           | Warning   | Investigar causa    |
+| Tasa de fallo > 15%          | Critical  | Alerta inmediata    |
+| Gateway latency P99 > 5s     | Warning   | Revisar gateway     |
+| DLQ creciendo > 100 msg/hora | Critical  | Intervención manual |
+| Pagos/min < umbral histórico | Warning   | Posible problema    |
+
+---
+
+### Trace Completo (Ejemplo en Jaeger UI)
+
+```
+Trace: abc-123                                              Total: 1.5s
+│
+├─ payment-service
+│  └─ POST /payments ████░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░  250ms
+│     └─ POST /reserve ██░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░   45ms
+│     └─ Publish message █░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░    5ms
+│
+├─ consumer
+│  └─ ProcessPayment ░░░░░░░░░░░░░░████████████████████████ 1200ms
+│     └─ Call Gateway ░░░░░░░░░░░░░███████████████████████░ 1100ms
+│     └─ POST /confirm ░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░██   40ms
+```
+
+### Deploy en Railway
+
+#### Jaeger
+
+1. **New Service** → **Docker Image**
+2. Imagen: `jaegertracing/all-in-one:latest`
+3. Exponer puerto `16686` (UI)
+4. Acceder: `https://jaeger-xxx.railway.app`
+
+---
+
+## Plan de Escalabilidad
+
+### Arquitectura Escalable
+
+```
+                         Load Balancer
+                              │
+              ┌───────────────┼───────────────┐
+              ▼               ▼               ▼
+       ┌─────────────┐ ┌─────────────┐ ┌─────────────┐
+       │ Payment Svc │ │ Payment Svc │ │ Payment Svc │
+       │ API+Consumer│ │ API+Consumer│ │ API+Consumer│
+       │ (pool: 25)  │ │ (pool: 25)  │ │ (pool: 25)  │
+       └──────┬──────┘ └──────┬──────┘ └──────┬──────┘
+              │               │               │
+    ┌─────────┴───────────────┴───────────────┴─────────┐
+    │                         │                         │
+    ▼                         ▼                         ▼
+┌─────────────┐        ┌─────────────┐          ┌─────────────┐
+│ PostgreSQL  │        │  RabbitMQ   │          │   Jaeger    │
+│   (1 inst)  │        │   (1 inst)  │          │   (1 inst)  │
+└─────────────┘        └─────────────┘          └─────────────┘
+```
+
+### Estrategias Implementadas (Challenge)
+
+| Componente     | Estrategia      | Implementación                                     |
+| -------------- | --------------- | -------------------------------------------------- |
+| **APIs**       | Load Balancer   | Railway gestiona automáticamente con `numReplicas` |
+| **PostgreSQL** | Connection Pool | `SetMaxOpenConns(25)` por instancia                |
+| **RabbitMQ**   | Work Queue      | Competing consumers, cada mensaje → 1 worker       |
+| **Apps**       | Stateless       | Todo estado en PostgreSQL/RabbitMQ                 |
+
+---
+
+### APIs: Load Balancer
+
+El Load Balancer distribuye requests HTTP entre múltiples instancias:
+
+```
+Cliente → https://api.example.com
+                    │
+                    ▼
+            ┌─────────────┐
+            │ Load Balancer│  ← Conoce IPs de todas las instancias
+            └──────┬──────┘
+                   │ Round Robin / Least Connections
+        ┌──────────┼──────────┐
+        ▼          ▼          ▼
+    Instance 1  Instance 2  Instance 3
+```
+
+**Requisito:** Las apps deben ser **stateless** (sin estado en memoria local).
+
+> **Nota:** Para el challenge usamos containers en Railway. En producción, cada servicio podría desplegarse en **VMs separadas** (EC2, GCP Compute, etc.) para gestionar recursos (CPU, RAM, disco) de forma independiente y tener mayor control sobre el escalamiento.
+
+---
+
+### PostgreSQL: Connection Pool
+
+Cada instancia limita sus conexiones para no saturar la DB:
+
+```go
+func NewPostgresConnection(url string) *sql.DB {
+    db, _ := sql.Open("postgres", url)
+
+    db.SetMaxOpenConns(25)          // Máx conexiones abiertas
+    db.SetMaxIdleConns(10)          // Conexiones en espera
+    db.SetConnMaxLifetime(5 * time.Minute)
+
+    return db
+}
+```
+
+**Cálculo:** 3 instancias × 25 conexiones = 75 conexiones totales.
+
+---
+
+### RabbitMQ: Work Queue (Competing Consumers)
+
+Múltiples consumers escuchan la **misma cola**. RabbitMQ distribuye mensajes automáticamente:
+
+```
+              Publisher (cualquier instancia)
+                         │
+                         ▼
+            ┌─────────────────────────┐
+            │        RabbitMQ         │
+            │   Queue: payments.created│
+            │   [msg1][msg2][msg3]... │
+            └───────────┬─────────────┘
+                        │ Round-robin
+         ┌──────────────┼──────────────┐
+         ▼              ▼              ▼
+    Consumer 1     Consumer 2     Consumer 3
+    (Instance 1)   (Instance 2)   (Instance 3)
+    Recibe: 1,4,7  Recibe: 2,5,8  Recibe: 3,6,9
+```
+
+**Garantías:**
+
+- Cada mensaje va a **UN solo** consumer (no hay duplicados)
+- Si un consumer no hace ACK, el mensaje vuelve a la cola
+- Todas las instancias usan el **mismo nombre de cola** y **misma URL**
+
+```go
+// Configuración IGUAL para todas las instancias
+const queueName = "payments.created"
+rabbitConn := rabbitmq.NewConnection(os.Getenv("RABBITMQ_URL"))
+```
+
+---
+
+### Escalamiento Futuro (Si la App Crece)
+
+| Necesidad         | Solución                   | Cuándo             |
+| ----------------- | -------------------------- | ------------------ |
+| Más lecturas DB   | **Read Replicas**          | > 10K queries/seg  |
+| Más conexiones DB | **PgBouncer**              | > 500 conexiones   |
+| Tablas grandes    | **Partitioning** por fecha | > 100M filas       |
+| RabbitMQ HA       | **Cluster** (3 nodos)      | Producción crítica |
+| Sharding          | Múltiples DBs              | > 1M writes/seg    |
+
+---
+
+### RabbitMQ Cluster (Alta Disponibilidad)
+
+Para producción crítica, RabbitMQ soporta clustering con replicación de colas:
+
+```
+┌─────────────────────────────────────────────────────────┐
+│                   RabbitMQ Cluster                      │
+│                                                         │
+│  ┌─────────────┐  ┌─────────────┐  ┌─────────────┐    │
+│  │   Node 1    │  │   Node 2    │  │   Node 3    │    │
+│  │  (Primary)  │◀─│  (Mirror)   │◀─│  (Mirror)   │    │
+│  │             │─▶│             │─▶│             │    │
+│  └─────────────┘  └─────────────┘  └─────────────┘    │
+│                                                         │
+│  - Colas replicadas en todos los nodos                 │
+│  - Si Node 1 cae, Node 2 asume como primary            │
+│  - Clientes se reconectan automáticamente              │
+└─────────────────────────────────────────────────────────┘
+```
+
+**Configuración:** Se define con políticas de RabbitMQ (`ha-mode: all`).
+
+**Para el challenge:** Un solo nodo es suficiente.
+
+---
+
+### Partitioning (Event Store)
+
+Para tablas que crecen indefinidamente:
+
+```sql
+CREATE TABLE payment_events (...) PARTITION BY RANGE (created_at);
+
+CREATE TABLE payment_events_y2024m01
+    PARTITION OF payment_events
+    FOR VALUES FROM ('2024-01-01') TO ('2024-02-01');
+```
+
+**Beneficios:** Queries por fecha más rápidos, fácil archivar datos viejos.
+
+---
+
+### Triggers de Escalamiento
+
+| Métrica       | Umbral         | Acción            |
+| ------------- | -------------- | ----------------- |
+| CPU           | > 70%          | Agregar instancia |
+| Memoria       | > 80%          | Agregar instancia |
+| Cola RabbitMQ | > 10K mensajes | Agregar consumer  |
+| Latencia P99  | > 500ms        | Investigar        |
+
+---
+
+## Testing (Testify + Table-Driven Tests)
+
+### Enfoque Principal
+
+El sistema utiliza **Table-Driven Tests con Error Cases** como patrón estándar. Este enfoque proporciona:
+
+- **Cobertura completa** en una sola función de test
+- **Documentación del comportamiento** a través de nombres descriptivos
+- **Fácil mantenimiento** y extensión de casos
+
+### Patrón AAA (Arrange-Act-Assert)
+
+Todas las pruebas siguen el patrón AAA para estructura clara:
+
+```
+┌─────────────────────────────────────────────────────────────────┐
+│  1. ARRANGE  - Preparar datos, mocks y dependencias            │
+│  2. ACT      - Ejecutar la operación bajo prueba               │
+│  3. ASSERT   - Verificar resultados y comportamiento esperado  │
+└─────────────────────────────────────────────────────────────────┘
+```
+
+### Convenciones de Nomenclatura
+
+**Archivos:**
+
+- Tests: `*_test.go` (mismo paquete que el código)
+- Mocks: `*_mock.go` (archivos dedicados)
+
+**Nombres BDD (Behavior-Driven Development):**
+
+```
+"when [condición] it should [comportamiento esperado] and [estado del error]"
+```
+
+Ejemplos:
+
+- `"when user provides valid data it should create user successfully and no error"`
+- `"when email already exists it should return validation error"`
+
+### Estructura del Test
+
+| Elemento           | Descripción                          |
+| ------------------ | ------------------------------------ |
+| `tests []struct{}` | Slice de casos de prueba             |
+| `name`             | Descripción BDD del escenario        |
+| `input`            | Datos de entrada                     |
+| `expectedResult`   | Resultado esperado                   |
+| `expectedError`    | Error esperado (nil si no hay error) |
+| `t.Run()`          | Ejecuta cada caso como subtest       |
+
+### Ejemplo: Service con Mock
+
+```go
+// wallet_client_mock.go
+type MockWalletClient struct {
+    mock.Mock
+}
+
+func (m *MockWalletClient) Reserve(ctx context.Context, userID string, amount float64) error {
+    args := m.Called(ctx, userID, amount)
+    return args.Error(0)
+}
+
+// payment_service_test.go
+func TestPaymentService_Create(t *testing.T) {
+    tests := []struct {
+        name           string
+        userID         string
+        amount         float64
+        shouldCallMock bool
+        mockResponse   error
+        expectedError  error
+    }{
+        {
+            name:           "when valid payment data it should create payment and no error",
+            userID:         "user-123",
+            amount:         100.0,
+            shouldCallMock: true,
+            mockResponse:   nil,
+            expectedError:  nil,
+        },
+        {
+            name:           "when wallet reserve fails it should return error",
+            userID:         "user-123",
+            amount:         100.0,
+            shouldCallMock: true,
+            mockResponse:   errors.New("insufficient funds"),
+            expectedError:  errors.New("insufficient funds"),
+        },
+        {
+            name:           "when amount is zero it should return validation error",
+            userID:         "user-123",
+            amount:         0,
+            shouldCallMock: false,  // Validación falla antes de llamar al mock
+            expectedError:  errors.New("amount must be positive"),
+        },
+    }
+
+    for _, tt := range tests {
+        t.Run(tt.name, func(t *testing.T) {
+            // Arrange
+            mockWallet := new(MockWalletClient)
+            if tt.shouldCallMock {
+                mockWallet.On("Reserve", mock.Anything, tt.userID, tt.amount).Return(tt.mockResponse)
+            }
+            service := NewPaymentService(mockWallet)
+
+            // Act
+            _, err := service.Create(context.Background(), tt.userID, tt.amount)
+
+            // Assert
+            if tt.expectedError != nil {
+                assert.Error(t, err)
+                assert.Equal(t, tt.expectedError.Error(), err.Error())
+            } else {
+                assert.NoError(t, err)
+            }
+
+            mockWallet.AssertExpectations(t)
+        })
+    }
+}
+```
+
+### Resumen de Principios
+
+| Principio        | Descripción                           |
+| ---------------- | ------------------------------------- |
+| **Table-Driven** | Múltiples escenarios en una función   |
+| **Error Cases**  | Probar explícitamente casos de error  |
+| **AAA Pattern**  | Arrange → Act → Assert                |
+| **BDD Names**    | Nombres que documentan comportamiento |
+| **Mock Files**   | Archivos `_mock.go` separados         |
+| **Idempotencia** | Tests independientes entre sí         |
+
+### Ejecución
+
+```bash
+# Ejecutar todos los tests
+go test ./...
+
+# Con cobertura
+go test -cover ./...
+
+# Generar reporte HTML
+go test -coverprofile=coverage.out ./...
+go tool cover -html=coverage.out -o coverage.html
+```
+
+> **Referencia completa:** Ver las reglas de testing de cursor para más detalles.
