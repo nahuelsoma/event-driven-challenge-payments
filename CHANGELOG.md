@@ -4,6 +4,7 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
+- Add events reader endpoint ([#8](https://github.com/nahuelsoma/event-driven-challenge-payments/pull/8))
 - Enhance error wrapping and logging ([#7](https://github.com/nahuelsoma/event-driven-challenge-payments/pull/7))
 - Add message broker publisher and consumer ([#6](https://github.com/nahuelsoma/event-driven-challenge-payments/pull/6))
 - Add message broker connection with retry capabilities ([#5](https://github.com/nahuelsoma/event-driven-challenge-payments/pull/5))
