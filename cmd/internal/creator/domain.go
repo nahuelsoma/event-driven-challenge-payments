@@ -10,18 +10,14 @@ import (
 
 // PaymentRequest represents a request to create a payment
 type PaymentRequest struct {
-	IdempotencyKey string          `json:"idempotency_key"` // Idempotency key for the payment
-	UserID         string          `json:"user_id"`         // User ID of the payment (in a real application, this would be the user ID from the authenticated user)
-	Amount         float64         `json:"amount"`          // Amount of the payment
-	Currency       domain.Currency `json:"currency"`        // Currency of the payment
+	UserID   string          `json:"user_id"`  // User ID of the payment (in a real application, this would be the user ID from the authenticated user)
+	Amount   float64         `json:"amount"`   // Amount of the payment
+	Currency domain.Currency `json:"currency"` // Currency of the payment
 }
 
 // Validate validates the payment request
 // It returns an error if the request is invalid
 func (p *PaymentRequest) Validate() error {
-	if p.IdempotencyKey == "" {
-		return errors.New("idempotency key is required")
-	}
 	if p.UserID == "" {
 		return errors.New("user ID is required")
 	}

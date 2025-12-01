@@ -53,9 +53,9 @@ func NewPaymentCreatorService(ps PaymentStorer, wr WalletReserver, pp PaymentPub
 
 // Create creates a new payment and publishes it
 // Flow: Create (pending) → Reserve funds → Update to "reserved" → Publish
-func (pcs *PaymentCreatorService) Create(ctx context.Context, pr *PaymentRequest) (*domain.Payment, error) {
+func (pcs *PaymentCreatorService) Create(ctx context.Context, idempotencyKey string, pr *PaymentRequest) (*domain.Payment, error) {
 	// Step 1: Check if payment already exists
-	existingPayment, err := pcs.paymentStorer.GetByIDempotencyKey(ctx, pr.IdempotencyKey)
+	existingPayment, err := pcs.paymentStorer.GetByIDempotencyKey(ctx, idempotencyKey)
 	if err != nil {
 		return nil, fmt.Errorf("payment creator: failed to get payment by idempotency key: %w", err)
 	}
@@ -64,7 +64,7 @@ func (pcs *PaymentCreatorService) Create(ctx context.Context, pr *PaymentRequest
 	}
 
 	// Step 2: Create payment with status "pending"
-	payment := NewPayment(pr.IdempotencyKey, pr.UserID, pr.Amount, pr.Currency)
+	payment := NewPayment(idempotencyKey, pr.UserID, pr.Amount, pr.Currency)
 
 	if err := pcs.paymentStorer.Save(ctx, payment); err != nil {
 		return nil, fmt.Errorf("payment creator: failed to save payment: %w", err)

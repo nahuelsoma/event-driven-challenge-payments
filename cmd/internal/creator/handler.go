@@ -12,9 +12,9 @@ import (
 	"github.com/gin-gonic/gin"
 )
 
-// PaymentResolver defines the interface for payment creation business logic
+// PaymentCreator defines the interface for payment creation business logic
 type PaymentCreator interface {
-	Create(ctx context.Context, pr *PaymentRequest) (*domain.Payment, error)
+	Create(ctx context.Context, idempotencyKey string, pr *PaymentRequest) (*domain.Payment, error)
 }
 
 // Handler handles HTTP requests for payment operations
@@ -37,6 +37,16 @@ func NewHandler(pc PaymentCreator) (*Handler, error) {
 func (h *Handler) Create(c *gin.Context) {
 	ctx := c.Request.Context()
 
+	idempotencyKey := c.GetHeader("Idempotency-Key")
+	if idempotencyKey == "" {
+		slog.WarnContext(ctx, "Missing Idempotency-Key header")
+		c.JSON(http.StatusBadRequest, gin.H{
+			"message": "Idempotency-Key header is required",
+			"error":   "bad request",
+		})
+		return
+	}
+
 	var pr PaymentRequest
 	if err := json.NewDecoder(c.Request.Body).Decode(&pr); err != nil {
 		slog.ErrorContext(ctx, "Failed to decode payment request", "error", err)
@@ -56,7 +66,7 @@ func (h *Handler) Create(c *gin.Context) {
 		return
 	}
 
-	payment, err := h.paymentCreator.Create(ctx, &pr)
+	payment, err := h.paymentCreator.Create(ctx, idempotencyKey, &pr)
 	if err != nil {
 		slog.ErrorContext(ctx, "Failed to create payment", "error", err)
 		c.JSON(http.StatusInternalServerError, gin.H{
