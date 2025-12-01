@@ -30,11 +30,11 @@ func NewPaymentPublisherRepository(mb MessageBroker) (*PaymentPublisherRepositor
 func (r *PaymentPublisherRepository) Publish(ctx context.Context, payment *domain.Payment) error {
 	data, err := payment.Marshal()
 	if err != nil {
-		return fmt.Errorf("publisher: failed to marshal payment: %w", err)
+		return fmt.Errorf("payment publisher: marshal: %w", err)
 	}
 
 	if err := r.messageBroker.Publish(data); err != nil {
-		return fmt.Errorf("publisher: failed to publish payment: %w", err)
+		return fmt.Errorf("payment publisher: publish: %w", err)
 	}
 
 	return nil

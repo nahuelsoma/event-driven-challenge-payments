@@ -36,7 +36,7 @@ func NewPaymentFinderService(pr PaymentReader) (*PaymentFinderService, error) {
 func (pfs *PaymentFinderService) Find(ctx context.Context, filter *PaymentFilter) (*domain.Payment, error) {
 	payment, err := pfs.paymentReader.GetByID(ctx, filter.PaymentID)
 	if err != nil {
-		return nil, fmt.Errorf("payment finder: failed to get payment: %w", err)
+		return nil, fmt.Errorf("payment finder: get payment: %w", err)
 	}
 
 	if payment == nil {

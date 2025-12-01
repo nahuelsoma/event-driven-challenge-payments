@@ -50,7 +50,7 @@ func (r *PaymentReaderRepository) GetByID(ctx context.Context, paymentID string)
 	}
 
 	if err != nil {
-		return nil, fmt.Errorf("failed to get payment by id: %w", err)
+		return nil, fmt.Errorf("payment reader: get by id: %w", err)
 	}
 
 	return &payment, nil

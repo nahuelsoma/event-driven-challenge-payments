@@ -9,17 +9,17 @@ import (
 func Build(db paymentStorerDB, walletClient interface{}) (*Handler, error) {
 	ps, err := NewPaymentStorerRepository(db)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("processor builder: %w", err)
 	}
 
 	wc, err := NewWalletConfirmerRepository(walletClient)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("processor builder: %w", err)
 	}
 
 	wr, err := NewWalletReleaserRepository(walletClient)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("processor builder: %w", err)
 	}
 
 	// Create gateway client
@@ -30,22 +30,22 @@ func Build(db paymentStorerDB, walletClient interface{}) (*Handler, error) {
 
 	gatewayClient, err := http.NewHTTPClient(gatewayConfig)
 	if err != nil {
-		return nil, fmt.Errorf("processor: failed to create gateway client: %w", err)
+		return nil, fmt.Errorf("processor builder: %w", err)
 	}
 
 	gp, err := NewGatewayProcessorRepository(gatewayClient)
 	if err != nil {
-		return nil, fmt.Errorf("processor: failed to create gateway processor repository: %w", err)
+		return nil, fmt.Errorf("processor builder: %w", err)
 	}
 
 	pps, err := NewPaymentProcessorService(ps, ps, wc, wr, gp)
 	if err != nil {
-		return nil, fmt.Errorf("processor: failed to create payment processor service: %w", err)
+		return nil, fmt.Errorf("processor builder: %w", err)
 	}
 
 	h, err := NewHandler(pps)
 	if err != nil {
-		return nil, fmt.Errorf("processor: failed to create handler: %w", err)
+		return nil, fmt.Errorf("processor builder: %w", err)
 	}
 
 	return h, nil
