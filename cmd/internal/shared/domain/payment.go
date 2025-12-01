@@ -1,6 +1,8 @@
 package domain
 
 import (
+	"encoding/json"
+	"errors"
 	"time"
 )
 
@@ -14,4 +16,23 @@ type Payment struct {
 	Status         Status    `json:"status"`          // Status of the payment
 	CreatedAt      time.Time `json:"created_at"`      // Timestamp when the payment was created
 	UpdatedAt      time.Time `json:"updated_at"`      // Timestamp when the payment was updated
+}
+
+// Validate validates the payment
+func (p *Payment) Validate() error {
+	if p.ID == "" {
+		return errors.New("payment ID is required")
+	}
+	if p.UserID == "" {
+		return errors.New("user ID is required")
+	}
+	if p.Amount <= 0 {
+		return errors.New("amount must be greater than 0")
+	}
+	return nil
+}
+
+// Parse parses a payment from bytes
+func (p *Payment) Parse(body []byte) error {
+	return json.Unmarshal(body, p)
 }
