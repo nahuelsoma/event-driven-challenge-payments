@@ -34,8 +34,6 @@ func NewHandler(pp PaymentProcessor) (*Handler, error) {
 func (h *Handler) HandleMessage(body []byte) error {
 	ctx := context.Background()
 
-	slog.InfoContext(ctx, "Processing payment message", "body", string(body))
-
 	// Parse message
 	var payment domain.Payment
 	if err := payment.Parse(body); err != nil {
@@ -45,11 +43,9 @@ func (h *Handler) HandleMessage(body []byte) error {
 
 	// Validate message
 	if err := payment.Validate(); err != nil {
-		slog.WarnContext(ctx, "Invalid payment message", "error", err, "payment_id", payment.ID)
+		slog.ErrorContext(ctx, "Invalid payment message", "error", err, "payment_id", payment.ID)
 		return err
 	}
-
-	slog.InfoContext(ctx, "Processing payment", "payment_id", payment.ID, "user_id", payment.UserID, "amount", payment.Amount)
 
 	// Process payment
 	if err := h.paymentProcessor.Process(ctx, &payment); err != nil {
@@ -57,6 +53,5 @@ func (h *Handler) HandleMessage(body []byte) error {
 		return err
 	}
 
-	slog.InfoContext(ctx, "Payment processed successfully", "payment_id", payment.ID)
 	return nil
 }

@@ -40,7 +40,6 @@ func (h *Handler) Find(c *gin.Context) {
 	filter := &PaymentFilter{PaymentID: paymentID}
 
 	if err := filter.Validate(); err != nil {
-		slog.WarnContext(ctx, "Invalid payment filter", "error", err)
 		c.JSON(http.StatusBadRequest, gin.H{
 			"message": err.Error(),
 			"error":   "bad request",

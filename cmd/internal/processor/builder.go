@@ -1,7 +1,7 @@
 package processor
 
 import (
-	"log"
+	"fmt"
 
 	"github.com/nahuelsoma/event-driven-challenge-payments/infrastructure/http"
 )
@@ -30,22 +30,22 @@ func Build(db paymentStorerDB, walletClient interface{}) (*Handler, error) {
 
 	gatewayClient, err := http.NewHTTPClient(gatewayConfig)
 	if err != nil {
-		log.Fatalf("api: failed to create HTTP client: %v", err)
+		return nil, fmt.Errorf("processor: failed to create gateway client: %w", err)
 	}
 
 	gp, err := NewGatewayProcessorRepository(gatewayClient)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("processor: failed to create gateway processor repository: %w", err)
 	}
 
 	pps, err := NewPaymentProcessorService(ps, ps, wc, wr, gp)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("processor: failed to create payment processor service: %w", err)
 	}
 
 	h, err := NewHandler(pps)
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("processor: failed to create handler: %w", err)
 	}
 
 	return h, nil

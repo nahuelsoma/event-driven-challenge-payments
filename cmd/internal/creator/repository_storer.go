@@ -6,7 +6,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"log/slog"
 	"time"
 
 	"github.com/google/uuid"
@@ -32,8 +31,6 @@ func NewPaymentStorerRepository(db paymentStorerDB) (*PaymentStorerRepository, e
 }
 
 func (r *PaymentStorerRepository) GetByIDempotencyKey(ctx context.Context, idempotencyKey string) (*domain.Payment, error) {
-	slog.DebugContext(ctx, "[DEBUG] PaymentStorerRepository.GetByIDempotencyKey called", "idempotency_key", idempotencyKey)
-
 	query := `
 		SELECT id, idempotency_key, user_id, amount, currency, status, created_at, updated_at
 		FROM payments
@@ -64,8 +61,6 @@ func (r *PaymentStorerRepository) GetByIDempotencyKey(ctx context.Context, idemp
 }
 
 func (r *PaymentStorerRepository) Save(ctx context.Context, payment *domain.Payment) error {
-	slog.DebugContext(ctx, "[DEBUG] PaymentStorerRepository.Save called", "payment_id", payment.ID, "user_id", payment.UserID, "amount", payment.Amount)
-
 	// Build event payload
 	payload, err := json.Marshal(map[string]interface{}{
 		"payment_id":      payment.ID,
@@ -127,8 +122,6 @@ func (r *PaymentStorerRepository) Save(ctx context.Context, payment *domain.Paym
 }
 
 func (r *PaymentStorerRepository) UpdateStatus(ctx context.Context, paymentID string, status domain.Status) error {
-	slog.DebugContext(ctx, "[DEBUG] PaymentStorerRepository.UpdateStatus called", "payment_id", paymentID, "status", status)
-
 	// Build event payload
 	payload, err := json.Marshal(map[string]interface{}{
 		"payment_id": paymentID,

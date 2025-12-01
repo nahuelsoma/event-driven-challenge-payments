@@ -39,7 +39,6 @@ func (h *Handler) Create(c *gin.Context) {
 
 	idempotencyKey := c.GetHeader("Idempotency-Key")
 	if idempotencyKey == "" {
-		slog.WarnContext(ctx, "Missing Idempotency-Key header")
 		c.JSON(http.StatusBadRequest, gin.H{
 			"message": "Idempotency-Key header is required",
 			"error":   "bad request",
@@ -49,7 +48,6 @@ func (h *Handler) Create(c *gin.Context) {
 
 	var pr PaymentRequest
 	if err := json.NewDecoder(c.Request.Body).Decode(&pr); err != nil {
-		slog.ErrorContext(ctx, "Failed to decode payment request", "error", err)
 		c.JSON(http.StatusBadRequest, gin.H{
 			"message": "invalid request body",
 			"error":   "bad request",
@@ -58,7 +56,6 @@ func (h *Handler) Create(c *gin.Context) {
 	}
 
 	if err := pr.Validate(); err != nil {
-		slog.WarnContext(ctx, "Invalid payment request", "error", err)
 		c.JSON(http.StatusBadRequest, gin.H{
 			"message": err.Error(),
 			"error":   "bad request",
