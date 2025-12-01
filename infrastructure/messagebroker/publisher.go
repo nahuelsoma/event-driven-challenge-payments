@@ -1,8 +1,6 @@
 package messagebroker
 
 import (
-	"errors"
-
 	"github.com/streadway/amqp"
 )
 
@@ -19,9 +17,14 @@ type Publisher struct {
 }
 
 // NewPublisher creates a new publisher
-func NewPublisher(channel *Channel, config PublisherConfig) (*Publisher, error) {
-	if channel == nil || channel.ch == nil {
-		return nil, errors.New("publisher: channel cannot be nil")
+func NewPublisher(conn *Connection, config PublisherConfig) (*Publisher, error) {
+	if err := conn.Validate(); err != nil {
+		return nil, err
+	}
+
+	channel, err := conn.NewChannel()
+	if err != nil {
+		return nil, err
 	}
 
 	return &Publisher{
