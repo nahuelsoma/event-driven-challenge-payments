@@ -9,12 +9,14 @@ import (
 	"github.com/nahuelsoma/event-driven-challenge-payments/infrastructure/messagebroker"
 )
 
+const (
+	queueName = "payments"
+	workers   = 3
+)
+
 // StartConsumer initializes and starts the message consumer
 // Returns after setup is complete. Message consumption runs in background goroutines.
-func StartConsumer(db *database.DB, conn *messagebroker.Connection, walletClient interface{}, gatewayClient interface{}, queueName string, workers int) error {
-	if queueName == "" {
-		return fmt.Errorf("consumer: queue name cannot be empty")
-	}
+func StartConsumer(db *database.DB, conn *messagebroker.Connection, walletClient interface{}, gatewayClient interface{}) error {
 
 	// Create channel for consumer
 	channel, err := conn.NewChannel()
