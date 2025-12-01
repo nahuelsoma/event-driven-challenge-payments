@@ -27,7 +27,7 @@ func main() {
 	// Create database connection
 	dbConn, err := database.NewPostgresConnection(cfg.Database.URL())
 	if err != nil {
-		log.Fatalf("api: failed to create database connection: %v", err)
+		log.Fatalf("main: failed to create database connection: %v", err)
 	}
 	defer dbConn.Close()
 
@@ -39,21 +39,21 @@ func main() {
 
 	walletClient, err := http.NewHTTPClient(httpConfig)
 	if err != nil {
-		log.Fatalf("api: failed to create HTTP client: %v", err)
+		log.Fatalf("main: failed to create HTTP client: %v", err)
 	}
 
 	// Create RabbitMQ connection
 	messageBrokerConn, err := messagebroker.Connect(cfg.MessageBroker.URL())
 	if err != nil {
-		log.Fatalf("api: failed to create RabbitMQ connection: %v", err)
+		log.Fatalf("main: failed to create RabbitMQ connection: %v", err)
 	}
 	defer messageBrokerConn.Close()
 
 	if err := app.StartAPI(dbConn, walletClient, messageBrokerConn, cfg.QueueName); err != nil {
-		log.Fatalf("api: failed to start API: %v", err)
+		log.Fatalf("main: failed to start API: %v", err)
 	}
 
 	if err := app.StartConsumer(dbConn, messageBrokerConn, walletClient, cfg.QueueName); err != nil {
-		log.Fatalf("api: failed to start consumer: %v", err)
+		log.Fatalf("main: failed to start consumer: %v", err)
 	}
 }
