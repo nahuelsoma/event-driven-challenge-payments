@@ -4,7 +4,7 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
-- Add message broker publisher ([#6](https://github.com/nahuelsoma/event-driven-challenge-payments/pull/6))
+- Add message broker publisher and consumer ([#6](https://github.com/nahuelsoma/event-driven-challenge-payments/pull/6))
 - Add message broker connection with retry capabilities ([#5](https://github.com/nahuelsoma/event-driven-challenge-payments/pull/5))
 - Add repository logic for local storage operations and migration scripts ([#4](https://github.com/nahuelsoma/event-driven-challenge-payments/pull/4))
 - Add Postgres connection with retry capabilities ([#3](https://github.com/nahuelsoma/event-driven-challenge-payments/pull/3))
