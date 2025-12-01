@@ -4,8 +4,8 @@ import (
 	"github.com/gin-gonic/gin"
 )
 
-func Start(rg *gin.RouterGroup, databaseConn interface{}) error {
-	pr, err := NewPaymentReaderRepository(databaseConn)
+func Start(rg *gin.RouterGroup, db paymentReaderDB) error {
+	pr, err := NewPaymentReaderRepository(db)
 	if err != nil {
 		return err
 	}
