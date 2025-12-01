@@ -34,6 +34,8 @@ func NewHandler(pp PaymentProcessor) (*Handler, error) {
 func (h *Handler) HandleMessage(body []byte) error {
 	ctx := context.Background()
 
+	slog.InfoContext(ctx, "Processing payment message", "body", string(body))
+
 	// Parse message
 	var payment domain.Payment
 	if err := payment.Parse(body); err != nil {
