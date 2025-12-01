@@ -4,8 +4,8 @@ package domain
 type Status string
 
 const (
-	StatusPending   Status = "PENDING"   // The payment is pending
-	StatusReserved  Status = "RESERVED"  // The payment is reserved
-	StatusCompleted Status = "COMPLETED" // The payment is completed
-	StatusFailed    Status = "FAILED"    // The payment is failed
+	StatusPending   Status = "pending"   // The payment is pending
+	StatusReserved  Status = "reserved"  // The payment is reserved
+	StatusCompleted Status = "completed" // The payment is completed
+	StatusFailed    Status = "failed"    // The payment is failed
 )
