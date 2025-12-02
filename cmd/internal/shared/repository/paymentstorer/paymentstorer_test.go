@@ -63,27 +63,25 @@ func TestPaymentRepository_GetByID(t *testing.T) {
 	tests := []struct {
 		name            string
 		paymentID       string
-		setupMock       func(mockDB *database.MockDB, mockScanner *database.MockRowScanner)
+		mockPayment     *domain.Payment
+		mockScanError   error
 		expectedPayment *domain.Payment
 		expectedError   error
 	}{
 		{
 			name:      "when payment exists it should return payment and no error",
 			paymentID: "pay_123",
-			setupMock: func(mockDB *database.MockDB, mockScanner *database.MockRowScanner) {
-				mockScanner.On("Scan", mock.Anything).Run(func(args mock.Arguments) {
-					dest := args.Get(0).([]any)
-					*dest[0].(*string) = "pay_123"
-					*dest[1].(*string) = "key_456"
-					*dest[2].(*string) = "user_789"
-					*dest[3].(*float64) = 100.50
-					*dest[4].(*domain.Currency) = domain.CurrencyUSD
-					*dest[5].(*domain.Status) = domain.StatusPending
-					*dest[6].(*time.Time) = fixedTime
-					*dest[7].(*time.Time) = fixedTime
-				}).Return(nil)
-				mockDB.On("QueryRowContext", mock.Anything, mock.Anything, mock.Anything).Return(mockScanner)
+			mockPayment: &domain.Payment{
+				ID:             "pay_123",
+				IdempotencyKey: "key_456",
+				UserID:         "user_789",
+				Amount:         100.50,
+				Currency:       domain.CurrencyUSD,
+				Status:         domain.StatusPending,
+				CreatedAt:      fixedTime,
+				UpdatedAt:      fixedTime,
 			},
+			mockScanError: nil,
 			expectedPayment: &domain.Payment{
 				ID:             "pay_123",
 				IdempotencyKey: "key_456",
@@ -97,22 +95,18 @@ func TestPaymentRepository_GetByID(t *testing.T) {
 			expectedError: nil,
 		},
 		{
-			name:      "when payment does not exist it should return ErrPaymentNotFound",
-			paymentID: "pay_nonexistent",
-			setupMock: func(mockDB *database.MockDB, mockScanner *database.MockRowScanner) {
-				mockScanner.On("Scan", mock.Anything).Return(sql.ErrNoRows)
-				mockDB.On("QueryRowContext", mock.Anything, mock.Anything, mock.Anything).Return(mockScanner)
-			},
+			name:          "when payment does not exist it should return ErrPaymentNotFound",
+			paymentID:     "pay_nonexistent",
+			mockPayment:   nil,
+			mockScanError: sql.ErrNoRows,
 			expectedPayment: nil,
 			expectedError:   domain.ErrPaymentNotFound,
 		},
 		{
-			name:      "when database error occurs it should return wrapped error",
-			paymentID: "pay_123",
-			setupMock: func(mockDB *database.MockDB, mockScanner *database.MockRowScanner) {
-				mockScanner.On("Scan", mock.Anything).Return(errors.New("connection refused"))
-				mockDB.On("QueryRowContext", mock.Anything, mock.Anything, mock.Anything).Return(mockScanner)
-			},
+			name:          "when database error occurs it should return wrapped error",
+			paymentID:     "pay_123",
+			mockPayment:   nil,
+			mockScanError: errors.New("connection refused"),
 			expectedPayment: nil,
 			expectedError:   errors.New("payment repository: get by id: connection refused"),
 		},
@@ -123,7 +117,24 @@ func TestPaymentRepository_GetByID(t *testing.T) {
 			// Arrange
 			mockDB := new(database.MockDB)
 			mockScanner := new(database.MockRowScanner)
-			tt.setupMock(mockDB, mockScanner)
+
+			if tt.mockPayment != nil {
+				mockScanner.On("Scan", mock.Anything).Run(func(args mock.Arguments) {
+					dest := args.Get(0).([]any)
+					*dest[0].(*string) = tt.mockPayment.ID
+					*dest[1].(*string) = tt.mockPayment.IdempotencyKey
+					*dest[2].(*string) = tt.mockPayment.UserID
+					*dest[3].(*float64) = tt.mockPayment.Amount
+					*dest[4].(*domain.Currency) = tt.mockPayment.Currency
+					*dest[5].(*domain.Status) = tt.mockPayment.Status
+					*dest[6].(*time.Time) = tt.mockPayment.CreatedAt
+					*dest[7].(*time.Time) = tt.mockPayment.UpdatedAt
+				}).Return(tt.mockScanError)
+			} else {
+				mockScanner.On("Scan", mock.Anything).Return(tt.mockScanError)
+			}
+
+			mockDB.On("QueryRowContext", mock.Anything, mock.Anything, mock.Anything).Return(mockScanner)
 
 			repo := &PaymentRepository{db: mockDB}
 
@@ -158,27 +169,25 @@ func TestPaymentRepository_GetByIDempotencyKey(t *testing.T) {
 	tests := []struct {
 		name            string
 		idempotencyKey  string
-		setupMock       func(mockDB *database.MockDB, mockScanner *database.MockRowScanner)
+		mockPayment     *domain.Payment
+		mockScanError   error
 		expectedPayment *domain.Payment
 		expectedError   error
 	}{
 		{
 			name:           "when payment exists it should return payment and no error",
 			idempotencyKey: "key_456",
-			setupMock: func(mockDB *database.MockDB, mockScanner *database.MockRowScanner) {
-				mockScanner.On("Scan", mock.Anything).Run(func(args mock.Arguments) {
-					dest := args.Get(0).([]any)
-					*dest[0].(*string) = "pay_123"
-					*dest[1].(*string) = "key_456"
-					*dest[2].(*string) = "user_789"
-					*dest[3].(*float64) = 100.50
-					*dest[4].(*domain.Currency) = domain.CurrencyUSD
-					*dest[5].(*domain.Status) = domain.StatusPending
-					*dest[6].(*time.Time) = fixedTime
-					*dest[7].(*time.Time) = fixedTime
-				}).Return(nil)
-				mockDB.On("QueryRowContext", mock.Anything, mock.Anything, mock.Anything).Return(mockScanner)
+			mockPayment: &domain.Payment{
+				ID:             "pay_123",
+				IdempotencyKey: "key_456",
+				UserID:         "user_789",
+				Amount:         100.50,
+				Currency:       domain.CurrencyUSD,
+				Status:         domain.StatusPending,
+				CreatedAt:      fixedTime,
+				UpdatedAt:      fixedTime,
 			},
+			mockScanError: nil,
 			expectedPayment: &domain.Payment{
 				ID:             "pay_123",
 				IdempotencyKey: "key_456",
@@ -192,22 +201,18 @@ func TestPaymentRepository_GetByIDempotencyKey(t *testing.T) {
 			expectedError: nil,
 		},
 		{
-			name:           "when payment does not exist it should return nil payment and no error",
-			idempotencyKey: "key_nonexistent",
-			setupMock: func(mockDB *database.MockDB, mockScanner *database.MockRowScanner) {
-				mockScanner.On("Scan", mock.Anything).Return(sql.ErrNoRows)
-				mockDB.On("QueryRowContext", mock.Anything, mock.Anything, mock.Anything).Return(mockScanner)
-			},
+			name:            "when payment does not exist it should return nil payment and no error",
+			idempotencyKey:  "key_nonexistent",
+			mockPayment:     nil,
+			mockScanError:   sql.ErrNoRows,
 			expectedPayment: nil,
 			expectedError:   nil,
 		},
 		{
-			name:           "when database error occurs it should return wrapped error",
-			idempotencyKey: "key_456",
-			setupMock: func(mockDB *database.MockDB, mockScanner *database.MockRowScanner) {
-				mockScanner.On("Scan", mock.Anything).Return(errors.New("connection refused"))
-				mockDB.On("QueryRowContext", mock.Anything, mock.Anything, mock.Anything).Return(mockScanner)
-			},
+			name:            "when database error occurs it should return wrapped error",
+			idempotencyKey:  "key_456",
+			mockPayment:     nil,
+			mockScanError:   errors.New("connection refused"),
 			expectedPayment: nil,
 			expectedError:   errors.New("payment repository: get by idempotency key: connection refused"),
 		},
@@ -218,7 +223,24 @@ func TestPaymentRepository_GetByIDempotencyKey(t *testing.T) {
 			// Arrange
 			mockDB := new(database.MockDB)
 			mockScanner := new(database.MockRowScanner)
-			tt.setupMock(mockDB, mockScanner)
+
+			if tt.mockPayment != nil {
+				mockScanner.On("Scan", mock.Anything).Run(func(args mock.Arguments) {
+					dest := args.Get(0).([]any)
+					*dest[0].(*string) = tt.mockPayment.ID
+					*dest[1].(*string) = tt.mockPayment.IdempotencyKey
+					*dest[2].(*string) = tt.mockPayment.UserID
+					*dest[3].(*float64) = tt.mockPayment.Amount
+					*dest[4].(*domain.Currency) = tt.mockPayment.Currency
+					*dest[5].(*domain.Status) = tt.mockPayment.Status
+					*dest[6].(*time.Time) = tt.mockPayment.CreatedAt
+					*dest[7].(*time.Time) = tt.mockPayment.UpdatedAt
+				}).Return(tt.mockScanError)
+			} else {
+				mockScanner.On("Scan", mock.Anything).Return(tt.mockScanError)
+			}
+
+			mockDB.On("QueryRowContext", mock.Anything, mock.Anything, mock.Anything).Return(mockScanner)
 
 			repo := &PaymentRepository{db: mockDB}
 
@@ -254,10 +276,10 @@ func TestPaymentRepository_Save(t *testing.T) {
 	fixedTime := time.Date(2024, 1, 15, 10, 30, 0, 0, time.UTC)
 
 	tests := []struct {
-		name          string
-		payment       *domain.Payment
-		setupMock     func(mockDB *database.MockDB)
-		expectedError error
+		name                string
+		payment             *domain.Payment
+		mockTransactionError error
+		expectedError       error
 	}{
 		{
 			name: "when payment is valid it should save successfully and no error",
@@ -271,10 +293,8 @@ func TestPaymentRepository_Save(t *testing.T) {
 				CreatedAt:      fixedTime,
 				UpdatedAt:      fixedTime,
 			},
-			setupMock: func(mockDB *database.MockDB) {
-				mockDB.On("WithTransaction", mock.Anything, mock.Anything).Return(nil)
-			},
-			expectedError: nil,
+			mockTransactionError: nil,
+			expectedError:        nil,
 		},
 		{
 			name: "when transaction fails it should return wrapped error",
@@ -288,10 +308,8 @@ func TestPaymentRepository_Save(t *testing.T) {
 				CreatedAt:      fixedTime,
 				UpdatedAt:      fixedTime,
 			},
-			setupMock: func(mockDB *database.MockDB) {
-				mockDB.On("WithTransaction", mock.Anything, mock.Anything).Return(errors.New("insert event: duplicate key"))
-			},
-			expectedError: errors.New("payment repository: save: insert event: duplicate key"),
+			mockTransactionError: errors.New("insert event: duplicate key"),
+			expectedError:        errors.New("payment repository: save: insert event: duplicate key"),
 		},
 	}
 
@@ -299,7 +317,7 @@ func TestPaymentRepository_Save(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			// Arrange
 			mockDB := new(database.MockDB)
-			tt.setupMock(mockDB)
+			mockDB.On("WithTransaction", mock.Anything, mock.Anything).Return(tt.mockTransactionError)
 
 			repo := &PaymentRepository{db: mockDB}
 
@@ -321,42 +339,36 @@ func TestPaymentRepository_Save(t *testing.T) {
 
 func TestPaymentRepository_UpdateStatus(t *testing.T) {
 	tests := []struct {
-		name          string
-		paymentID     string
-		status        domain.Status
-		gatewayRef    string
-		setupMock     func(mockDB *database.MockDB)
-		expectedError error
+		name                string
+		paymentID           string
+		status              domain.Status
+		gatewayRef          string
+		mockTransactionError error
+		expectedError       error
 	}{
 		{
-			name:       "when payment exists it should update status successfully and no error",
-			paymentID:  "pay_123",
-			status:     domain.StatusCompleted,
-			gatewayRef: "gw_ref_456",
-			setupMock: func(mockDB *database.MockDB) {
-				mockDB.On("WithTransaction", mock.Anything, mock.Anything).Return(nil)
-			},
-			expectedError: nil,
+			name:                "when payment exists it should update status successfully and no error",
+			paymentID:           "pay_123",
+			status:              domain.StatusCompleted,
+			gatewayRef:          "gw_ref_456",
+			mockTransactionError: nil,
+			expectedError:       nil,
 		},
 		{
-			name:       "when updating to failed status it should update successfully and no error",
-			paymentID:  "pay_123",
-			status:     domain.StatusFailed,
-			gatewayRef: "",
-			setupMock: func(mockDB *database.MockDB) {
-				mockDB.On("WithTransaction", mock.Anything, mock.Anything).Return(nil)
-			},
-			expectedError: nil,
+			name:                "when updating to failed status it should update successfully and no error",
+			paymentID:           "pay_123",
+			status:              domain.StatusFailed,
+			gatewayRef:          "",
+			mockTransactionError: nil,
+			expectedError:       nil,
 		},
 		{
-			name:       "when transaction fails it should return wrapped error",
-			paymentID:  "pay_123",
-			status:     domain.StatusCompleted,
-			gatewayRef: "gw_ref_456",
-			setupMock: func(mockDB *database.MockDB) {
-				mockDB.On("WithTransaction", mock.Anything, mock.Anything).Return(errors.New("payment not found: pay_123"))
-			},
-			expectedError: errors.New("payment repository: update status: payment not found: pay_123"),
+			name:                "when transaction fails it should return wrapped error",
+			paymentID:           "pay_123",
+			status:              domain.StatusCompleted,
+			gatewayRef:          "gw_ref_456",
+			mockTransactionError: errors.New("payment not found: pay_123"),
+			expectedError:       errors.New("payment repository: update status: payment not found: pay_123"),
 		},
 	}
 
@@ -364,7 +376,7 @@ func TestPaymentRepository_UpdateStatus(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			// Arrange
 			mockDB := new(database.MockDB)
-			tt.setupMock(mockDB)
+			mockDB.On("WithTransaction", mock.Anything, mock.Anything).Return(tt.mockTransactionError)
 
 			repo := &PaymentRepository{db: mockDB}
 
@@ -390,40 +402,37 @@ func TestPaymentRepository_GetEventsByPaymentID(t *testing.T) {
 	tests := []struct {
 		name           string
 		paymentID      string
-		setupMock      func(mockDB *database.MockDB, mockRows *database.MockRows)
+		mockEvents     []*domain.Event
+		mockQueryError error
+		mockScanError  error
+		mockRowsError  error
 		expectedEvents []*domain.Event
 		expectedError  error
 	}{
 		{
 			name:      "when events exist it should return events and no error",
 			paymentID: "pay_123",
-			setupMock: func(mockDB *database.MockDB, mockRows *database.MockRows) {
-				callCount := 0
-				mockRows.On("Next").Return(true).Times(2)
-				mockRows.On("Next").Return(false).Once()
-				mockRows.On("Scan", mock.Anything).Run(func(args mock.Arguments) {
-					dest := args.Get(0).([]any)
-					callCount++
-					if callCount == 1 {
-						*dest[0].(*string) = "evt_1"
-						*dest[1].(*string) = "pay_123"
-						*dest[2].(*int) = 1
-						*dest[3].(*string) = "created"
-						*dest[4].(*json.RawMessage) = json.RawMessage(`{"status":"pending"}`)
-						*dest[5].(*time.Time) = fixedTime
-					} else {
-						*dest[0].(*string) = "evt_2"
-						*dest[1].(*string) = "pay_123"
-						*dest[2].(*int) = 2
-						*dest[3].(*string) = "completed"
-						*dest[4].(*json.RawMessage) = json.RawMessage(`{"status":"completed"}`)
-						*dest[5].(*time.Time) = fixedTime
-					}
-				}).Return(nil).Times(2)
-				mockRows.On("Close").Return(nil)
-				mockRows.On("Err").Return(nil)
-				mockDB.On("QueryContext", mock.Anything, mock.Anything, mock.Anything).Return(mockRows, nil)
+			mockEvents: []*domain.Event{
+				{
+					ID:        "evt_1",
+					PaymentID: "pay_123",
+					Sequence:  1,
+					EventType: "created",
+					Payload:   json.RawMessage(`{"status":"pending"}`),
+					CreatedAt: fixedTime,
+				},
+				{
+					ID:        "evt_2",
+					PaymentID: "pay_123",
+					Sequence:  2,
+					EventType: "completed",
+					Payload:   json.RawMessage(`{"status":"completed"}`),
+					CreatedAt: fixedTime,
+				},
 			},
+			mockQueryError: nil,
+			mockScanError:  nil,
+			mockRowsError:  nil,
 			expectedEvents: []*domain.Event{
 				{
 					ID:        "evt_1",
@@ -445,47 +454,42 @@ func TestPaymentRepository_GetEventsByPaymentID(t *testing.T) {
 			expectedError: nil,
 		},
 		{
-			name:      "when no events exist it should return empty slice and no error",
-			paymentID: "pay_123",
-			setupMock: func(mockDB *database.MockDB, mockRows *database.MockRows) {
-				mockRows.On("Next").Return(false).Once()
-				mockRows.On("Close").Return(nil)
-				mockRows.On("Err").Return(nil)
-				mockDB.On("QueryContext", mock.Anything, mock.Anything, mock.Anything).Return(mockRows, nil)
-			},
+			name:           "when no events exist it should return empty slice and no error",
+			paymentID:      "pay_123",
+			mockEvents:     []*domain.Event{},
+			mockQueryError: nil,
+			mockScanError:  nil,
+			mockRowsError:  nil,
 			expectedEvents: []*domain.Event{},
 			expectedError:  nil,
 		},
 		{
-			name:      "when query fails it should return wrapped error",
-			paymentID: "pay_123",
-			setupMock: func(mockDB *database.MockDB, mockRows *database.MockRows) {
-				mockDB.On("QueryContext", mock.Anything, mock.Anything, mock.Anything).Return(nil, errors.New("connection refused"))
-			},
+			name:           "when query fails it should return wrapped error",
+			paymentID:      "pay_123",
+			mockEvents:     nil,
+			mockQueryError: errors.New("connection refused"),
+			mockScanError:  nil,
+			mockRowsError:  nil,
 			expectedEvents: nil,
 			expectedError:  errors.New("payment repository: get events by payment id: connection refused"),
 		},
 		{
-			name:      "when scan fails it should return wrapped error",
-			paymentID: "pay_123",
-			setupMock: func(mockDB *database.MockDB, mockRows *database.MockRows) {
-				mockRows.On("Next").Return(true).Once()
-				mockRows.On("Scan", mock.Anything).Return(errors.New("scan error"))
-				mockRows.On("Close").Return(nil)
-				mockDB.On("QueryContext", mock.Anything, mock.Anything, mock.Anything).Return(mockRows, nil)
-			},
+			name:           "when scan fails it should return wrapped error",
+			paymentID:      "pay_123",
+			mockEvents:     nil,
+			mockQueryError: nil,
+			mockScanError:  errors.New("scan error"),
+			mockRowsError:  nil,
 			expectedEvents: nil,
 			expectedError:  errors.New("payment repository: scan event: scan error"),
 		},
 		{
-			name:      "when rows iteration fails it should return wrapped error",
-			paymentID: "pay_123",
-			setupMock: func(mockDB *database.MockDB, mockRows *database.MockRows) {
-				mockRows.On("Next").Return(false).Once()
-				mockRows.On("Close").Return(nil)
-				mockRows.On("Err").Return(errors.New("iteration error"))
-				mockDB.On("QueryContext", mock.Anything, mock.Anything, mock.Anything).Return(mockRows, nil)
-			},
+			name:           "when rows iteration fails it should return wrapped error",
+			paymentID:      "pay_123",
+			mockEvents:     []*domain.Event{},
+			mockQueryError: nil,
+			mockScanError:  nil,
+			mockRowsError:  errors.New("iteration error"),
 			expectedEvents: nil,
 			expectedError:  errors.New("payment repository: iterate events: iteration error"),
 		},
@@ -496,7 +500,43 @@ func TestPaymentRepository_GetEventsByPaymentID(t *testing.T) {
 			// Arrange
 			mockDB := new(database.MockDB)
 			mockRows := new(database.MockRows)
-			tt.setupMock(mockDB, mockRows)
+
+			if tt.mockQueryError != nil {
+				mockDB.On("QueryContext", mock.Anything, mock.Anything, mock.Anything).Return(nil, tt.mockQueryError)
+			} else {
+				eventCount := len(tt.mockEvents)
+				if tt.mockScanError != nil {
+					mockRows.On("Next").Return(true).Once()
+					mockRows.On("Scan", mock.Anything).Return(tt.mockScanError)
+					mockRows.On("Close").Return(nil)
+				} else if tt.mockRowsError != nil {
+					mockRows.On("Next").Return(false).Once()
+					mockRows.On("Close").Return(nil)
+					mockRows.On("Err").Return(tt.mockRowsError)
+				} else {
+					if eventCount > 0 {
+						mockRows.On("Next").Return(true).Times(eventCount)
+						mockRows.On("Next").Return(false).Once()
+						scanCallCount := 0
+						mockRows.On("Scan", mock.Anything).Run(func(args mock.Arguments) {
+							dest := args.Get(0).([]any)
+							event := tt.mockEvents[scanCallCount]
+							*dest[0].(*string) = event.ID
+							*dest[1].(*string) = event.PaymentID
+							*dest[2].(*int) = event.Sequence
+							*dest[3].(*string) = event.EventType
+							*dest[4].(*json.RawMessage) = event.Payload
+							*dest[5].(*time.Time) = event.CreatedAt
+							scanCallCount++
+						}).Return(nil).Times(eventCount)
+					} else {
+						mockRows.On("Next").Return(false).Once()
+					}
+					mockRows.On("Close").Return(nil)
+					mockRows.On("Err").Return(nil)
+				}
+				mockDB.On("QueryContext", mock.Anything, mock.Anything, mock.Anything).Return(mockRows, nil)
+			}
 
 			repo := &PaymentRepository{db: mockDB}
 

@@ -65,7 +65,9 @@ func TestHandler_Create(t *testing.T) {
 		name               string
 		idempotencyKey     string
 		requestBody        interface{}
-		setupMock          func(mockCreator *MockPaymentCreatorService)
+		mockPayment        *domain.Payment
+		mockCreateError    error
+		shouldCallCreate   bool
 		expectedStatusCode int
 		expectedMessage    string
 	}{
@@ -77,31 +79,26 @@ func TestHandler_Create(t *testing.T) {
 				Amount:   100.50,
 				Currency: domain.CurrencyUSD,
 			},
-			setupMock: func(mockCreator *MockPaymentCreatorService) {
-				payment := &domain.Payment{
-					ID:             "pay_123",
-					IdempotencyKey: "key_123",
-					UserID:         "user_123",
-					Amount:         100.50,
-					Currency:       domain.CurrencyUSD,
-					Status:         domain.StatusReserved,
-					CreatedAt:      fixedTime,
-					UpdatedAt:      fixedTime,
-				}
-				mockCreator.On("Create", mock.Anything, "key_123", mock.Anything).Return(payment, nil)
+			mockPayment: &domain.Payment{
+				ID:             "pay_123",
+				IdempotencyKey: "key_123",
+				UserID:         "user_123",
+				Amount:         100.50,
+				Currency:       domain.CurrencyUSD,
+				Status:         domain.StatusReserved,
+				CreatedAt:      fixedTime,
+				UpdatedAt:      fixedTime,
 			},
+			mockCreateError:    nil,
+			shouldCallCreate:   true,
 			expectedStatusCode: http.StatusCreated,
 			expectedMessage:    "payment created successfully",
 		},
 		{
-			name:           "when idempotency key is missing it should return 400",
-			idempotencyKey: "",
-			requestBody: PaymentRequest{
-				UserID:   "user_123",
-				Amount:   100.50,
-				Currency: domain.CurrencyUSD,
-			},
-			setupMock:          func(mockCreator *MockPaymentCreatorService) {},
+			name:               "when idempotency key is missing it should return 400",
+			idempotencyKey:     "",
+			requestBody:        PaymentRequest{UserID: "user_123", Amount: 100.50, Currency: domain.CurrencyUSD},
+			shouldCallCreate:   false,
 			expectedStatusCode: http.StatusBadRequest,
 			expectedMessage:    "Idempotency-Key header is required",
 		},
@@ -109,57 +106,41 @@ func TestHandler_Create(t *testing.T) {
 			name:               "when request body is invalid JSON it should return 400",
 			idempotencyKey:     "key_123",
 			requestBody:        "invalid json",
-			setupMock:          func(mockCreator *MockPaymentCreatorService) {},
+			shouldCallCreate:   false,
 			expectedStatusCode: http.StatusBadRequest,
 			expectedMessage:    "invalid request body",
 		},
 		{
-			name:           "when user ID is empty it should return 400",
-			idempotencyKey: "key_123",
-			requestBody: PaymentRequest{
-				UserID:   "",
-				Amount:   100.50,
-				Currency: domain.CurrencyUSD,
-			},
-			setupMock:          func(mockCreator *MockPaymentCreatorService) {},
+			name:               "when user ID is empty it should return 400",
+			idempotencyKey:     "key_123",
+			requestBody:        PaymentRequest{UserID: "", Amount: 100.50, Currency: domain.CurrencyUSD},
+			shouldCallCreate:   false,
 			expectedStatusCode: http.StatusBadRequest,
 			expectedMessage:    "user ID is required",
 		},
 		{
-			name:           "when amount is zero it should return 400",
-			idempotencyKey: "key_123",
-			requestBody: PaymentRequest{
-				UserID:   "user_123",
-				Amount:   0,
-				Currency: domain.CurrencyUSD,
-			},
-			setupMock:          func(mockCreator *MockPaymentCreatorService) {},
+			name:               "when amount is zero it should return 400",
+			idempotencyKey:     "key_123",
+			requestBody:        PaymentRequest{UserID: "user_123", Amount: 0, Currency: domain.CurrencyUSD},
+			shouldCallCreate:   false,
 			expectedStatusCode: http.StatusBadRequest,
 			expectedMessage:    "amount must be greater than 0",
 		},
 		{
-			name:           "when currency is invalid it should return 400",
-			idempotencyKey: "key_123",
-			requestBody: PaymentRequest{
-				UserID:   "user_123",
-				Amount:   100.50,
-				Currency: domain.Currency("INVALID"),
-			},
-			setupMock:          func(mockCreator *MockPaymentCreatorService) {},
+			name:               "when currency is invalid it should return 400",
+			idempotencyKey:     "key_123",
+			requestBody:        PaymentRequest{UserID: "user_123", Amount: 100.50, Currency: domain.Currency("INVALID")},
+			shouldCallCreate:   false,
 			expectedStatusCode: http.StatusBadRequest,
 			expectedMessage:    "invalid currency",
 		},
 		{
-			name:           "when payment creator fails it should return 500",
-			idempotencyKey: "key_123",
-			requestBody: PaymentRequest{
-				UserID:   "user_123",
-				Amount:   100.50,
-				Currency: domain.CurrencyUSD,
-			},
-			setupMock: func(mockCreator *MockPaymentCreatorService) {
-				mockCreator.On("Create", mock.Anything, "key_123", mock.Anything).Return(nil, errors.New("database error"))
-			},
+			name:               "when payment creator fails it should return 500",
+			idempotencyKey:     "key_123",
+			requestBody:        PaymentRequest{UserID: "user_123", Amount: 100.50, Currency: domain.CurrencyUSD},
+			mockPayment:        nil,
+			mockCreateError:    errors.New("database error"),
+			shouldCallCreate:   true,
 			expectedStatusCode: http.StatusInternalServerError,
 			expectedMessage:    "failed to create payment",
 		},
@@ -169,7 +150,9 @@ func TestHandler_Create(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			// Arrange
 			mockCreator := new(MockPaymentCreatorService)
-			tt.setupMock(mockCreator)
+			if tt.shouldCallCreate {
+				mockCreator.On("Create", mock.Anything, tt.idempotencyKey, mock.Anything).Return(tt.mockPayment, tt.mockCreateError)
+			}
 
 			handler := &Handler{paymentCreator: mockCreator}
 
@@ -206,4 +189,3 @@ func TestHandler_Create(t *testing.T) {
 		})
 	}
 }
-

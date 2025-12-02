@@ -61,7 +61,7 @@ func TestPaymentPublisherRepository_Publish(t *testing.T) {
 	tests := []struct {
 		name          string
 		payment       *domain.Payment
-		setupMock     func(mockBroker *messagebroker.MockPublisher)
+		mockPublishError error
 		expectedError error
 	}{
 		{
@@ -76,10 +76,8 @@ func TestPaymentPublisherRepository_Publish(t *testing.T) {
 				CreatedAt:      fixedTime,
 				UpdatedAt:      fixedTime,
 			},
-			setupMock: func(mockBroker *messagebroker.MockPublisher) {
-				mockBroker.On("Publish", mock.Anything).Return(nil)
-			},
-			expectedError: nil,
+			mockPublishError: nil,
+			expectedError:    nil,
 		},
 		{
 			name: "when broker fails to publish it should return wrapped error",
@@ -93,10 +91,8 @@ func TestPaymentPublisherRepository_Publish(t *testing.T) {
 				CreatedAt:      fixedTime,
 				UpdatedAt:      fixedTime,
 			},
-			setupMock: func(mockBroker *messagebroker.MockPublisher) {
-				mockBroker.On("Publish", mock.Anything).Return(errors.New("connection refused"))
-			},
-			expectedError: errors.New("publisher: failed to publish payment: connection refused"),
+			mockPublishError: errors.New("connection refused"),
+			expectedError:    errors.New("publisher: failed to publish payment: connection refused"),
 		},
 	}
 
@@ -104,7 +100,7 @@ func TestPaymentPublisherRepository_Publish(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			// Arrange
 			mockBroker := new(messagebroker.MockPublisher)
-			tt.setupMock(mockBroker)
+			mockBroker.On("Publish", mock.Anything).Return(tt.mockPublishError)
 
 			repo := &PaymentPublisherRepository{messageBroker: mockBroker}
 

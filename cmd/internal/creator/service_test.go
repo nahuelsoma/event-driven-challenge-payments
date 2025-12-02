@@ -76,12 +76,21 @@ func TestPaymentCreatorService_Create(t *testing.T) {
 	fixedTime := time.Date(2024, 1, 15, 10, 30, 0, 0, time.UTC)
 
 	tests := []struct {
-		name           string
-		idempotencyKey string
-		request        *PaymentRequest
-		setupMocks     func(storer *paymentstorer.MockPaymentRepository, reserver *walletclient.MockWalletClient, publisher *MockPaymentPublisherRepository)
-		expectedError  error
-		expectPayment  bool
+		name                string
+		idempotencyKey      string
+		request             *PaymentRequest
+		mockExistingPayment *domain.Payment
+		mockGetError        error
+		mockSaveError       error
+		mockReserveError    error
+		mockUpdateError     error
+		mockPublishError    error
+		shouldCallSave      bool
+		shouldCallReserve   bool
+		shouldCallUpdate    bool
+		shouldCallPublish   bool
+		expectedError       error
+		expectPayment       bool
 	}{
 		{
 			name:           "when payment already exists it should return existing payment and no error",
@@ -91,21 +100,23 @@ func TestPaymentCreatorService_Create(t *testing.T) {
 				Amount:   100.50,
 				Currency: domain.CurrencyUSD,
 			},
-			setupMocks: func(storer *paymentstorer.MockPaymentRepository, reserver *walletclient.MockWalletClient, publisher *MockPaymentPublisherRepository) {
-				existingPayment := &domain.Payment{
-					ID:             "pay_existing",
-					IdempotencyKey: "key_existing",
-					UserID:         "user_123",
-					Amount:         100.50,
-					Currency:       domain.CurrencyUSD,
-					Status:         domain.StatusReserved,
-					CreatedAt:      fixedTime,
-					UpdatedAt:      fixedTime,
-				}
-				storer.On("GetByIDempotencyKey", mock.Anything, "key_existing").Return(existingPayment, nil)
+			mockExistingPayment: &domain.Payment{
+				ID:             "pay_existing",
+				IdempotencyKey: "key_existing",
+				UserID:         "user_123",
+				Amount:         100.50,
+				Currency:       domain.CurrencyUSD,
+				Status:         domain.StatusReserved,
+				CreatedAt:      fixedTime,
+				UpdatedAt:      fixedTime,
 			},
-			expectedError: nil,
-			expectPayment: true,
+			mockGetError:      nil,
+			shouldCallSave:    false,
+			shouldCallReserve: false,
+			shouldCallUpdate:  false,
+			shouldCallPublish: false,
+			expectedError:     nil,
+			expectPayment:     true,
 		},
 		{
 			name:           "when new payment is created successfully it should return payment and no error",
@@ -115,15 +126,18 @@ func TestPaymentCreatorService_Create(t *testing.T) {
 				Amount:   100.50,
 				Currency: domain.CurrencyUSD,
 			},
-			setupMocks: func(storer *paymentstorer.MockPaymentRepository, reserver *walletclient.MockWalletClient, publisher *MockPaymentPublisherRepository) {
-				storer.On("GetByIDempotencyKey", mock.Anything, "key_new").Return(nil, nil)
-				storer.On("Save", mock.Anything, mock.Anything).Return(nil)
-				reserver.On("Reserve", mock.Anything, "user_123", 100.50, mock.Anything).Return(nil)
-				storer.On("UpdateStatus", mock.Anything, mock.Anything, domain.StatusReserved, "").Return(nil)
-				publisher.On("Publish", mock.Anything, mock.Anything).Return(nil)
-			},
-			expectedError: nil,
-			expectPayment: true,
+			mockExistingPayment: nil,
+			mockGetError:         nil,
+			mockSaveError:        nil,
+			mockReserveError:     nil,
+			mockUpdateError:      nil,
+			mockPublishError:     nil,
+			shouldCallSave:       true,
+			shouldCallReserve:    true,
+			shouldCallUpdate:     true,
+			shouldCallPublish:    true,
+			expectedError:        nil,
+			expectPayment:        true,
 		},
 		{
 			name:           "when get by idempotency key fails it should return wrapped error",
@@ -133,11 +147,14 @@ func TestPaymentCreatorService_Create(t *testing.T) {
 				Amount:   100.50,
 				Currency: domain.CurrencyUSD,
 			},
-			setupMocks: func(storer *paymentstorer.MockPaymentRepository, reserver *walletclient.MockWalletClient, publisher *MockPaymentPublisherRepository) {
-				storer.On("GetByIDempotencyKey", mock.Anything, "key_error").Return(nil, errors.New("database error"))
-			},
-			expectedError: errors.New("payment creator: get by idempotency key: database error"),
-			expectPayment: false,
+			mockExistingPayment: nil,
+			mockGetError:        errors.New("database error"),
+			shouldCallSave:      false,
+			shouldCallReserve:   false,
+			shouldCallUpdate:    false,
+			shouldCallPublish:   false,
+			expectedError:       errors.New("payment creator: get by idempotency key: database error"),
+			expectPayment:       false,
 		},
 		{
 			name:           "when save payment fails it should return wrapped error",
@@ -147,12 +164,15 @@ func TestPaymentCreatorService_Create(t *testing.T) {
 				Amount:   100.50,
 				Currency: domain.CurrencyUSD,
 			},
-			setupMocks: func(storer *paymentstorer.MockPaymentRepository, reserver *walletclient.MockWalletClient, publisher *MockPaymentPublisherRepository) {
-				storer.On("GetByIDempotencyKey", mock.Anything, "key_save_error").Return(nil, nil)
-				storer.On("Save", mock.Anything, mock.Anything).Return(errors.New("save failed"))
-			},
-			expectedError: errors.New("payment creator: save payment: save failed"),
-			expectPayment: false,
+			mockExistingPayment: nil,
+			mockGetError:         nil,
+			mockSaveError:        errors.New("save failed"),
+			shouldCallSave:       true,
+			shouldCallReserve:    false,
+			shouldCallUpdate:     false,
+			shouldCallPublish:    false,
+			expectedError:        errors.New("payment creator: save payment: save failed"),
+			expectPayment:        false,
 		},
 		{
 			name:           "when reserve funds fails it should update status to failed and return wrapped error",
@@ -162,14 +182,17 @@ func TestPaymentCreatorService_Create(t *testing.T) {
 				Amount:   100.50,
 				Currency: domain.CurrencyUSD,
 			},
-			setupMocks: func(storer *paymentstorer.MockPaymentRepository, reserver *walletclient.MockWalletClient, publisher *MockPaymentPublisherRepository) {
-				storer.On("GetByIDempotencyKey", mock.Anything, "key_reserve_error").Return(nil, nil)
-				storer.On("Save", mock.Anything, mock.Anything).Return(nil)
-				reserver.On("Reserve", mock.Anything, "user_123", 100.50, mock.Anything).Return(errors.New("insufficient funds"))
-				storer.On("UpdateStatus", mock.Anything, mock.Anything, domain.StatusFailed, "").Return(nil)
-			},
-			expectedError: errors.New("payment creator: reserve funds: insufficient funds"),
-			expectPayment: false,
+			mockExistingPayment: nil,
+			mockGetError:         nil,
+			mockSaveError:        nil,
+			mockReserveError:     errors.New("insufficient funds"),
+			mockUpdateError:      nil,
+			shouldCallSave:       true,
+			shouldCallReserve:    true,
+			shouldCallUpdate:     true,
+			shouldCallPublish:    false,
+			expectedError:        errors.New("payment creator: reserve funds: insufficient funds"),
+			expectPayment:        false,
 		},
 		{
 			name:           "when reserve funds fails and update status fails it should return update status error",
@@ -179,14 +202,17 @@ func TestPaymentCreatorService_Create(t *testing.T) {
 				Amount:   100.50,
 				Currency: domain.CurrencyUSD,
 			},
-			setupMocks: func(storer *paymentstorer.MockPaymentRepository, reserver *walletclient.MockWalletClient, publisher *MockPaymentPublisherRepository) {
-				storer.On("GetByIDempotencyKey", mock.Anything, "key_reserve_update_error").Return(nil, nil)
-				storer.On("Save", mock.Anything, mock.Anything).Return(nil)
-				reserver.On("Reserve", mock.Anything, "user_123", 100.50, mock.Anything).Return(errors.New("insufficient funds"))
-				storer.On("UpdateStatus", mock.Anything, mock.Anything, domain.StatusFailed, "").Return(errors.New("update failed"))
-			},
-			expectedError: errors.New("payment creator: update status to failed: update failed"),
-			expectPayment: false,
+			mockExistingPayment: nil,
+			mockGetError:         nil,
+			mockSaveError:        nil,
+			mockReserveError:     errors.New("insufficient funds"),
+			mockUpdateError:      errors.New("update failed"),
+			shouldCallSave:       true,
+			shouldCallReserve:    true,
+			shouldCallUpdate:     true,
+			shouldCallPublish:    false,
+			expectedError:        errors.New("payment creator: update status to failed: update failed"),
+			expectPayment:        false,
 		},
 		{
 			name:           "when update status to reserved fails it should return wrapped error",
@@ -196,14 +222,17 @@ func TestPaymentCreatorService_Create(t *testing.T) {
 				Amount:   100.50,
 				Currency: domain.CurrencyUSD,
 			},
-			setupMocks: func(storer *paymentstorer.MockPaymentRepository, reserver *walletclient.MockWalletClient, publisher *MockPaymentPublisherRepository) {
-				storer.On("GetByIDempotencyKey", mock.Anything, "key_reserved_error").Return(nil, nil)
-				storer.On("Save", mock.Anything, mock.Anything).Return(nil)
-				reserver.On("Reserve", mock.Anything, "user_123", 100.50, mock.Anything).Return(nil)
-				storer.On("UpdateStatus", mock.Anything, mock.Anything, domain.StatusReserved, "").Return(errors.New("update reserved failed"))
-			},
-			expectedError: errors.New("payment creator: update status to reserved: update reserved failed"),
-			expectPayment: false,
+			mockExistingPayment: nil,
+			mockGetError:         nil,
+			mockSaveError:        nil,
+			mockReserveError:     nil,
+			mockUpdateError:      errors.New("update reserved failed"),
+			shouldCallSave:       true,
+			shouldCallReserve:    true,
+			shouldCallUpdate:     true,
+			shouldCallPublish:    false,
+			expectedError:        errors.New("payment creator: update status to reserved: update reserved failed"),
+			expectPayment:        false,
 		},
 		{
 			name:           "when publish fails it should return wrapped error",
@@ -213,15 +242,18 @@ func TestPaymentCreatorService_Create(t *testing.T) {
 				Amount:   100.50,
 				Currency: domain.CurrencyUSD,
 			},
-			setupMocks: func(storer *paymentstorer.MockPaymentRepository, reserver *walletclient.MockWalletClient, publisher *MockPaymentPublisherRepository) {
-				storer.On("GetByIDempotencyKey", mock.Anything, "key_publish_error").Return(nil, nil)
-				storer.On("Save", mock.Anything, mock.Anything).Return(nil)
-				reserver.On("Reserve", mock.Anything, "user_123", 100.50, mock.Anything).Return(nil)
-				storer.On("UpdateStatus", mock.Anything, mock.Anything, domain.StatusReserved, "").Return(nil)
-				publisher.On("Publish", mock.Anything, mock.Anything).Return(errors.New("publish failed"))
-			},
-			expectedError: errors.New("payment creator: publish payment: publish failed"),
-			expectPayment: false,
+			mockExistingPayment: nil,
+			mockGetError:         nil,
+			mockSaveError:        nil,
+			mockReserveError:     nil,
+			mockUpdateError:      nil,
+			mockPublishError:     errors.New("publish failed"),
+			shouldCallSave:       true,
+			shouldCallReserve:    true,
+			shouldCallUpdate:     true,
+			shouldCallPublish:    true,
+			expectedError:        errors.New("payment creator: publish payment: publish failed"),
+			expectPayment:        false,
 		},
 	}
 
@@ -231,7 +263,28 @@ func TestPaymentCreatorService_Create(t *testing.T) {
 			mockStorer := new(paymentstorer.MockPaymentRepository)
 			mockReserver := new(walletclient.MockWalletClient)
 			mockPublisher := new(MockPaymentPublisherRepository)
-			tt.setupMocks(mockStorer, mockReserver, mockPublisher)
+
+			mockStorer.On("GetByIDempotencyKey", mock.Anything, tt.idempotencyKey).Return(tt.mockExistingPayment, tt.mockGetError)
+
+			if tt.shouldCallSave {
+				mockStorer.On("Save", mock.Anything, mock.Anything).Return(tt.mockSaveError)
+			}
+
+			if tt.shouldCallReserve {
+				mockReserver.On("Reserve", mock.Anything, tt.request.UserID, tt.request.Amount, mock.Anything).Return(tt.mockReserveError)
+			}
+
+			if tt.shouldCallUpdate {
+				if tt.mockReserveError != nil {
+					mockStorer.On("UpdateStatus", mock.Anything, mock.Anything, domain.StatusFailed, "").Return(tt.mockUpdateError)
+				} else {
+					mockStorer.On("UpdateStatus", mock.Anything, mock.Anything, domain.StatusReserved, "").Return(tt.mockUpdateError)
+				}
+			}
+
+			if tt.shouldCallPublish {
+				mockPublisher.On("Publish", mock.Anything, mock.Anything).Return(tt.mockPublishError)
+			}
 
 			service := &PaymentCreatorService{
 				paymentStorer:    mockStorer,
