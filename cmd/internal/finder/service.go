@@ -14,7 +14,7 @@ type PaymentReader interface {
 	GetEventsByPaymentID(ctx context.Context, paymentID string) ([]*domain.Event, error)
 }
 
-// PaymentFinderService handles payment finding business logic
+// PaymentFinderService is a service for finding payments and events
 type PaymentFinderService struct {
 	paymentReader PaymentReader
 }
@@ -31,6 +31,7 @@ func NewPaymentFinderService(pr PaymentReader) (*PaymentFinderService, error) {
 }
 
 // Find finds a payment by ID
+// It finds a payment by ID and returns a payment and an error if the payment cannot be found
 func (pfs *PaymentFinderService) Find(ctx context.Context, filter *PaymentFilter) (*domain.Payment, error) {
 	payment, err := pfs.paymentReader.GetByID(ctx, filter.PaymentID)
 	if err != nil {
@@ -41,6 +42,7 @@ func (pfs *PaymentFinderService) Find(ctx context.Context, filter *PaymentFilter
 }
 
 // FindEvents finds all events for a payment by ID
+// It finds all events for a payment by ID and returns events and an error if the events cannot be found
 func (pfs *PaymentFinderService) FindEvents(ctx context.Context, paymentID string) ([]*domain.Event, error) {
 	events, err := pfs.paymentReader.GetEventsByPaymentID(ctx, paymentID)
 	if err != nil {

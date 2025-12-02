@@ -39,12 +39,26 @@ Este proyecto es la resolución del **Sistema de Pagos Orientado a Eventos** cha
 
 > **Nota:** Los repositorios de Wallet (`repository_reserver.go`, `repository_confirmer.go`, `repository_releaser.go`) tienen la estructura correcta pero contienen TODOs. Requieren implementar las llamadas HTTP al Wallet Service externo.
 
+### ✅ Testing
+
+| Componente              | Estado | Descripción                                                  |
+| ----------------------- | ------ | ------------------------------------------------------------ |
+| **Unit Tests**          | ✅     | Tests unitarios completos para paquetes internos y config    |
+| **Table-Driven Tests**  | ✅     | Patrón table-driven con casos de error siguiendo guidelines  |
+| **Mock Infrastructure** | ✅     | Mocks para interfaces usando Testify                         |
+| **Domain Tests**        | ✅     | Cobertura completa de modelos de dominio (Payment, Currency) |
+| **Service Tests**       | ✅     | Tests para servicios de negocio (creator, finder, processor) |
+| **Repository Tests**    | ✅     | Tests para repositorios con mocks de infraestructura         |
+| **Handler Tests**       | ✅     | Tests para handlers HTTP con validación de requests          |
+| **Config Tests**        | ✅     | Tests para carga de configuración desde variables de entorno |
+
+**Nota sobre Cobertura:** Los tests están enfocados en los paquetes internos (`cmd/internal/*`) y el paquete de configuración (`config`), que contienen la lógica de negocio crítica. Los paquetes de infraestructura (`infrastructure/*`) están diseñados para ser movidos a librerías compartidas en el futuro, por lo que no se incluyen tests unitarios en este repositorio (se testearían en sus respectivas librerías).
+
 ### ❌ No Implementado
 
 | Componente               | Justificación                                        |
 | ------------------------ | ---------------------------------------------------- |
 | **Wallet Service**       | Servicio externo separado (fuera del alcance)        |
-| **Unit Tests**           | Documentado pero no implementado por tiempo          |
 | **Health Checks**        | Endpoints `/health`, `/health/ready`, `/health/live` |
 | **Dead Letter Queue**    | Configuración de DLQ en RabbitMQ                     |
 | **Circuit Breaker**      | Patrón documentado, no implementado                  |

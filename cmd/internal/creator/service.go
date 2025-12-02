@@ -52,7 +52,8 @@ func NewPaymentCreatorService(ps PaymentStorer, wr WalletReserver, pp PaymentPub
 }
 
 // Create creates a new payment and publishes it
-// Flow: Create (pending) → Reserve funds → Update to "reserved" → Publish
+// It creates a new payment, reserves funds, updates the status to "reserved" and publishes the payment
+// It returns a new payment and an error if the payment cannot be created
 func (pcs *PaymentCreatorService) Create(ctx context.Context, idempotencyKey string, pr *PaymentRequest) (*domain.Payment, error) {
 	// Step 1: Check if payment already exists
 	existingPayment, err := pcs.paymentStorer.GetByIDempotencyKey(ctx, idempotencyKey)

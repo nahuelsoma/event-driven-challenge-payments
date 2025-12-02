@@ -11,6 +11,19 @@ import (
 	_ "github.com/lib/pq"
 )
 
+// RowScanner is an interface for scanning a single row
+type RowScanner interface {
+	Scan(dest ...any) error
+}
+
+// Rows is an interface for iterating over multiple rows
+type Rows interface {
+	Next() bool
+	Scan(dest ...any) error
+	Close() error
+	Err() error
+}
+
 // DB represents a PostgreSQL database with retry capabilities
 type DB struct {
 	conn       *sql.DB
@@ -49,6 +62,16 @@ func NewPostgresConnection(url string) (*DB, error) {
 // Conn returns the underlying sql.DB connection
 func (db *DB) Conn() *sql.DB {
 	return db.conn
+}
+
+// QueryRowContext executes a query that returns a single row
+func (db *DB) QueryRowContext(ctx context.Context, query string, args ...any) RowScanner {
+	return db.conn.QueryRowContext(ctx, query, args...)
+}
+
+// QueryContext executes a query that returns multiple rows
+func (db *DB) QueryContext(ctx context.Context, query string, args ...any) (Rows, error) {
+	return db.conn.QueryContext(ctx, query, args...)
 }
 
 // Close closes the database connection

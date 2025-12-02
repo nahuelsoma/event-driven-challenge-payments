@@ -12,6 +12,7 @@ import (
 )
 
 // Build creates a new Handler with all dependencies wired up
+// It builds a new handler and returns an error if the builder fails
 func Build(db paymentstorer.PaymentDB, rc *http.Client) (*Handler, error) {
 	ps, err := paymentstorer.NewStorer(db)
 	if err != nil {

@@ -19,6 +19,7 @@ type Payment struct {
 }
 
 // Validate validates the payment
+// It validates the payment and returns an error if the validation fails
 func (p *Payment) Validate() error {
 	if p.ID == "" {
 		return errors.New("payment ID is required")
@@ -32,17 +33,21 @@ func (p *Payment) Validate() error {
 	return nil
 }
 
+// UpdateStatus updates the status of the payment
+// It updates the status of the payment and the updated at timestamp
 func (p *Payment) UpdateStatus(status Status) {
 	p.Status = status
 	p.UpdatedAt = time.Now()
 }
 
 // Parse parses a payment from bytes
+// It parses a payment from bytes and returns an error if the parsing fails
 func (p *Payment) Parse(body []byte) error {
 	return json.Unmarshal(body, p)
 }
 
 // Marshal marshals a payment to bytes
+// It marshals a payment to bytes and returns an error if the marshalling fails
 func (p *Payment) Marshal() ([]byte, error) {
 	return json.Marshal(p)
 }
