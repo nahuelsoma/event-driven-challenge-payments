@@ -8,16 +8,11 @@ import (
 	"github.com/nahuelsoma/event-driven-challenge-payments/cmd/internal/shared/domain"
 )
 
-// Errors
-var (
-	ErrNilWalletClient = errors.New("wallet client cannot be nil")
-)
-
 // PaymentRequest represents a request to create a payment
 type PaymentRequest struct {
-	UserID   string          `json:"user_id"`  // User ID of the payment (in a real application, this would be the user ID from the authenticated user)
-	Amount   float64         `json:"amount"`   // Amount of the payment
-	Currency domain.Currency `json:"currency"` // Currency of the payment
+	UserID   string          `json:"user_id"`  // UserID is the user ID of the payment (in a real application, this would be the user ID from the authenticated user)
+	Amount   float64         `json:"amount"`   // Amount is the amount of the payment
+	Currency domain.Currency `json:"currency"` // Currency is the currency of the payment
 }
 
 // Validate validates the payment request
@@ -36,6 +31,7 @@ func (p *PaymentRequest) Validate() error {
 }
 
 // NewPayment creates a new payment
+// It returns a new payment with the given idempotency key, user ID, amount, and currency
 func NewPayment(idempotencyKey string, userID string, amount float64, currency domain.Currency) *domain.Payment {
 	return &domain.Payment{
 		ID:             uuid.New().String(),
