@@ -23,6 +23,7 @@ type Handler struct {
 }
 
 // NewHandler creates a new Payment controller
+// It returns a new Payment controller and an error if the payment finder is nil
 func NewHandler(pf PaymentFinder) (*Handler, error) {
 	if pf == nil {
 		return nil, errors.New("payment handler: payment finder cannot be nil")
