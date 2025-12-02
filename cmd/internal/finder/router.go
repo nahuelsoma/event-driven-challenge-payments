@@ -5,6 +5,8 @@ import (
 	"github.com/nahuelsoma/event-driven-challenge-payments/cmd/internal/shared/repository/paymentstorer"
 )
 
+// Start starts the finder router
+// It starts the finder router and returns an error if the builder fails
 func Start(rg *gin.RouterGroup, db paymentstorer.PaymentDB) error {
 	h, err := Build(db)
 	if err != nil {
