@@ -8,24 +8,24 @@ import (
 	"github.com/nahuelsoma/event-driven-challenge-payments/cmd/internal/shared/domain"
 )
 
-// PaymentResolver interface for resolving payment status
+// PaymentResolver is an interface for resolving payment status
 type PaymentResolver interface {
 	GetByID(ctx context.Context, paymentID string) (*domain.Payment, error)
 	UpdateStatus(ctx context.Context, paymentID string, status domain.Status, gatewayRef string) error
 }
 
-// WalletResolver interface for resolving funds
+// WalletResolver is an interface for resolving funds
 type WalletResolver interface {
 	Confirm(ctx context.Context, userID string, amount float64, paymentID string) error
 	Release(ctx context.Context, userID string, amount float64, paymentID string) error
 }
 
-// GatewayProcessor interface for processing payments with external gateway
+// GatewayProcessor is an interface for processing payments with external gateway
 type GatewayProcessor interface {
 	Process(ctx context.Context, paymentID string, amount float64) (string, error)
 }
 
-// PaymentProcessorService handles payment processing business logic
+// PaymentProcessorService is a service for processing payments
 type PaymentProcessorService struct {
 	paymentResolver  PaymentResolver
 	walletResolver   WalletResolver
@@ -33,6 +33,7 @@ type PaymentProcessorService struct {
 }
 
 // NewPaymentProcessorService creates a new PaymentProcessorService
+// It returns a new PaymentProcessorService and an error if the payment resolver, wallet resolver, or gateway processor is nil
 func NewPaymentProcessorService(
 	pr PaymentResolver,
 	wr WalletResolver,
@@ -56,7 +57,8 @@ func NewPaymentProcessorService(
 }
 
 // Process processes a payment
-// Flow: Check status (idempotency) → Process with gateway → Confirm/Release funds → Update status
+// It processes a payment and returns an error if the payment cannot be processed
+// It checks the payment status for idempotency, processes the payment with the gateway, confirms/releases funds and updates the status
 func (pps *PaymentProcessorService) Process(ctx context.Context, payment *domain.Payment) error {
 	// Step 1: Check payment status for idempotency
 	existing, err := pps.paymentResolver.GetByID(ctx, payment.ID)

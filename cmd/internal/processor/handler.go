@@ -19,6 +19,7 @@ type Handler struct {
 }
 
 // NewHandler creates a new processor handler
+// It returns a new processor handler and an error if the payment processor is nil
 func NewHandler(pp PaymentProcessor) (*Handler, error) {
 	if pp == nil {
 		return nil, errors.New("processor handler: payment processor cannot be nil")
@@ -30,7 +31,7 @@ func NewHandler(pp PaymentProcessor) (*Handler, error) {
 }
 
 // HandleMessage handles incoming messages from the queue
-// Implements the MessageHandler interface from infrastructure/messagebroker
+// It handles incoming messages from the queue and returns an error if the message cannot be parsed or processed
 func (h *Handler) HandleMessage(body []byte) error {
 	ctx := context.Background()
 

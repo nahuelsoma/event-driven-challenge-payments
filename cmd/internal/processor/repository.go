@@ -15,6 +15,7 @@ type GatewayProcessorRepository struct {
 }
 
 // NewGatewayProcessorRepository creates a new GatewayProcessorRepository
+// It returns a new GatewayProcessorRepository and an error if the client is nil
 func NewGatewayProcessorRepository(client *http.Client) (*GatewayProcessorRepository, error) {
 	if client == nil {
 		return nil, errors.New("gateway processor: client cannot be nil")
@@ -24,7 +25,7 @@ func NewGatewayProcessorRepository(client *http.Client) (*GatewayProcessorReposi
 }
 
 // Process processes a payment with the external gateway
-// Returns the gateway reference on success
+// It processes a payment with the external gateway and returns the gateway reference on success
 func (r *GatewayProcessorRepository) Process(ctx context.Context, paymentID string, amount float64) (string, error) {
 	slog.DebugContext(ctx, "[DEBUG] GatewayProcessorRepository.Process called", "payment_id", paymentID, "amount", amount)
 	// TODO: Implement the logic to process the payment via external gateway
