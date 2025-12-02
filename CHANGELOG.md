@@ -4,6 +4,8 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
+## [1.0.0] - 2025-12-02
+
 - Add tests and mocks for the internal and config packages ([#11](https://github.com/nahuelsoma/event-driven-challenge-payments/pull/11))
 - Unify common repositories ([#10](https://github.com/nahuelsoma/event-driven-challenge-payments/pull/10))
 - Add Readme ([#9](https://github.com/nahuelsoma/event-driven-challenge-payments/pull/9))
