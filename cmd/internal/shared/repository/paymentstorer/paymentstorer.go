@@ -10,11 +10,13 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/nahuelsoma/event-driven-challenge-payments/cmd/internal/shared/domain"
+	"github.com/nahuelsoma/event-driven-challenge-payments/infrastructure/database"
 )
 
 // PaymentDB defines the database operations required by PaymentRepository
 type PaymentDB interface {
-	Conn() *sql.DB
+	QueryRowContext(ctx context.Context, query string, args ...any) database.RowScanner
+	QueryContext(ctx context.Context, query string, args ...any) (database.Rows, error)
 	WithTransaction(ctx context.Context, fn func(tx *sql.Tx) error) error
 }
 
@@ -41,7 +43,7 @@ func (r *PaymentRepository) GetByID(ctx context.Context, paymentID string) (*dom
 	`
 
 	var payment domain.Payment
-	err := r.db.Conn().QueryRowContext(ctx, query, paymentID).Scan(
+	err := r.db.QueryRowContext(ctx, query, paymentID).Scan(
 		&payment.ID,
 		&payment.IdempotencyKey,
 		&payment.UserID,
@@ -72,7 +74,7 @@ func (r *PaymentRepository) GetByIDempotencyKey(ctx context.Context, idempotency
 	`
 
 	var payment domain.Payment
-	err := r.db.Conn().QueryRowContext(ctx, query, idempotencyKey).Scan(
+	err := r.db.QueryRowContext(ctx, query, idempotencyKey).Scan(
 		&payment.ID,
 		&payment.IdempotencyKey,
 		&payment.UserID,
@@ -237,7 +239,7 @@ func (r *PaymentRepository) GetEventsByPaymentID(ctx context.Context, paymentID 
 		ORDER BY sequence ASC
 	`
 
-	rows, err := r.db.Conn().QueryContext(ctx, query, paymentID)
+	rows, err := r.db.QueryContext(ctx, query, paymentID)
 	if err != nil {
 		return nil, fmt.Errorf("payment repository: get events by payment id: %w", err)
 	}
